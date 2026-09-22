@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Pre-Approve ของฉัน — EXION</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#B7081D">
+  <link rel="stylesheet" href="css/experience.css">
+</head>
+<body>
+  <div class="header">
+    <button class="back" aria-label="ย้อนกลับ" onclick="location.href='index.html'" id="backBtn"></button>
+    <h1><img src="icons/logo.png" alt="EXION" class="logo"><span style="font-size:13px;font-weight:700;margin-left:6px;">Pre-Approve ของฉัน</span></h1>
+  </div>
+
+  <div class="container">
+    <a href="pre-approve.html" class="btn btn-primary" style="text-decoration:none;margin-bottom:14px;">➕ ขอ Pre-Approve ใหม่</a>
+    <div id="kpiZone"></div>
+    <div id="list" class="loading"><div class="spinner"></div></div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/icons.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/experience.js"></script>
+  <script>
+    const session = requireLogin();
+    // หน้านี้ใช้แค่ 2 ประเภท แต่ยังดึงชื่อจากตารางกลาง คำจะได้ไม่เพี้ยนกัน
+    const CAT_TH = { ENT: catLabel('ENT'), GOLF: catLabel('GOLF') };
+
+    const bb = document.getElementById('backBtn');
+    if (bb && typeof icon === 'function') bb.innerHTML = icon('back');
+
+    async function load() {
+      try {
+        const all = await fetchMyRequests(session.Email);
+        const pres = (all || []).filter(r => r.PreApproveStatus);
+        const list = document.getElementById('list');
+        list.classList.remove('loading');
+
+        if (!pres.length) {
+          document.getElementById('kpiZone').innerHTML = '';
+          list.innerHTML = `<div class="empty"><div class="icon-wrap">📋</div>
+            <div class="title">ยังไม่มี Pre-Approve</div>
+            <div class="sub">กดปุ่มด้านบนเพื่อขออนุมัติงบล่วงหน้า</div></div>`;
+          renderBottomNav('');
+          return;
+        }
+
+        const pending = pres.filter(r => r.PreApproveStatus === 'Pending');
+        const ready   = pres.filter(r => r.PreApproveStatus === 'Approved' && r.Status !== 'Finalized');
+        const done    = pres.filter(r => r.Status === 'Finalized' || r.PreApproveStatus === 'Rejected');
+        const budgetTotal = ready.reduce((s,r) => s + (Number(r.PreApproveBudget)||0), 0);
+
+        document.getElementById('kpiZone').innerHTML = `<div class="kpi-grid">
+          <div class="kpi warn"><div class="n">${pending.length}</div><div class="l">รออนุมัติงบ</div></div>
+          <div class="kpi ok"><div class="n">${ready.length}</div><div class="l">รอส่งบิล</div></div>
+          <div class="kpi"><div class="n">${done.length}</div><div class="l">เสร็จสิ้น</div></div>
+          <div class="kpi"><div class="n">${Math.round(budgetTotal).toLocaleString()}</div><div class="l">งบคงค้าง</div></div>
+        </div>`;
+
+        let html = '';
+        if (ready.length) {
+          html += `<div class="sec-label" style="color:var(--success);">✅ อนุมัติงบแล้ว — รอส่งบิล (${ready.length})</div>`;
+          ready.forEach(r => html += row(r, 'ready'));
+        }
+        if (pending.length) {
+          html += `<div class="sec-label" style="color:#B45309;">⏳ รอหัวหน้าอนุมัติงบ (${pending.length})</div>`;
+          pending.forEach(r => html += row(r, 'pending'));
+        }
+        if (done.length) {
+          html += `<div class="sec-label">เสร็จสิ้น (${done.length})</div>`;
+          done.forEach(r => html += row(r, 'done'));
+        }
+        list.innerHTML = html;
+        renderBottomNav('');
+      } catch (err) {
+        renderError('list', err.message, load);
+        renderBottomNav('pre');
+      }
+    }
+
+    function row(r, state) {
+      const cls = state === 'ready' ? 'ok' : state === 'pending' ? 'warn' : '';
+      const badge = state === 'pending' ? '<span class="pill warn">⏳ รอหัวหน้า</span>'
+        : state === 'ready' ? '<span class="pill ok">✅ พร้อมส่งบิล</span>'
+        : r.Status === 'Finalized' ? '<span class="pill ok">✓ ส่งบิลแล้ว</span>'
+        : '<span class="pill bad">❌ ไม่อนุมัติ</span>';
+      const custRaw = String(r.Customer || '-');
+      const m = custRaw.match(/^\[(.+?)\]\s*(.*)$/);
+      const custTag = m ? `<span class="tag">${m[1]}</span> ${m[2]}` : custRaw;
+      const over = Number(r.Amount) > Number(r.PreApproveBudget);
+
+      return `<div class="req-card ${cls}">
+        <div class="ri-top">
+          <span class="ri-cat">${CAT_TH[r.Category] || r.Category}</span>
+          ${badge}
+          <span class="ri-amt">${formatCurrency(r.PreApproveBudget)} ฿</span>
+        </div>
+        <div class="ri-meta">${custTag}</div>
+        <div class="ri-meta">${formatDate(r.ExpenseDate)} • ${esc(r.Venue || '-')}</div>
+        ${r.Occasion ? `<div class="ri-meta" style="color:var(--gray-400);">💬 ${esc(r.Occasion)}</div>` : ''}
+        ${Number(r.Amount) > 0 ? `<div class="${over?'bad-box':'ok-box'}" style="margin:9px 0 0;">
+            ยอดจริง <b>${formatCurrency(r.Amount)} THB</b> ${over ? '— เกินงบ ต้องอนุมัติซ้ำ' : '— อยู่ในงบ ✓'}
+          </div>` : ''}
+        ${r.PreApproveBy ? `<div class="ri-meta" style="margin-top:6px;">อนุมัติงบโดย ${esc(r.PreApproveBy)}</div>` : ''}
+        ${state === 'ready' ? `<a href="finalize-claim.html?id=${esc(r.ID)}" class="btn btn-primary btn-sm" style="text-decoration:none;margin-top:10px;">📤 ส่งบิล + ยอดจริง</a>` : ''}
+      </div>`;
+    }
+
+    if (session) load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+EXION Expense Workspace 8
+Prepared: 2026-09-22
+Branch: feat/expense-experience-v8
+Base: 46d075025fc472a01e70d8a3a0cac711ca2155b1
+Status: local development delivery; not pushed or deployed.
+Start with README.md and docs/DEPLOYMENT.md.
+Screenshots and tests use sample data.

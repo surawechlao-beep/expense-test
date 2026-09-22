@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>รอบเบิกและการจ่ายเงิน — EXION Expense</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#B7081D">
+  <link rel="stylesheet" href="css/experience.css">
+</head>
+<body>
+  <div class="header">
+    <button class="back" aria-label="ย้อนกลับ" onclick="location.href = getApp() === 'petty' ? 'pc-home.html' : 'index.html'" id="backBtn"></button>
+    <h1><img src="icons/logo.png" alt="EXION" class="logo"><span style="font-size:13px;font-weight:700;margin-left:6px;">รอบเบิกและการจ่ายเงิน</span></h1>
+  </div>
+
+  <div class="container">    <!-- Monthly Export -->
+    <div class="card">
+      <div class="card-head"><span class="ib ib-green">📊</span>
+        <div><div class="ch-title">Export ใบเบิกรายเดือน</div>
+        <div class="ch-sub">ขออนุมัติ 1 ครั้ง แล้วดาวน์โหลด Excel ตัวจริงได้เลย</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;">
+        <div class="field" style="margin:0;"><label>เดือน</label><select id="exportMonth"></select></div>
+        <div class="field" style="margin:0;"><label>ปี</label><select id="exportYear"></select></div>
+      </div>
+      <div id="cutoffWrap" style="margin-top:12px;display:none;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div class="field" style="margin:0;"><label>ตั้งแต่วันที่</label><input type="date" id="cutoffStart"></div>
+          <div class="field" style="margin:0;"><label>ถึงวันที่</label><input type="date" id="cutoffEnd"></div>
+        </div>
+        <div class="hint" id="cutoffHint" style="margin-top:6px;">—</div>
+        <div id="cutoffWarn" style="margin-top:8px;"></div>
+      </div>
+      <div id="exportStatusBox" style="margin-top:14px;"><div class="loading" style="padding:20px;"><div class="spinner"></div></div></div>
+      <div id="exportActions" style="display:grid;gap:9px;margin-top:12px;"></div>
+    </div>
+
+<div id="paymentHistory" class="card"><h3>สถานะรอบเบิก</h3><div id="paymentRows" class="subtle">กำลังโหลด...</div></div></div>
+  <script src="js/config.js"></script>
+  <script src="js/icons.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/experience.js"></script>
+  <script src="js/account.js"></script>
+<script src="js/payments.js"></script></body></html>

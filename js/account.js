@@ -1,0 +1,293 @@
+
+    const session = requireLogin();
+    let myExports = [], sigPad = null;
+    const MONTHS = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+
+    function init() {
+      const bb = document.getElementById('backBtn');
+      if (bb && typeof icon === 'function') bb.innerHTML = icon('back');
+      if (document.getElementById('avatar')) {
+      document.getElementById('avatar').textContent = (session.Name||'?').trim().charAt(0).toUpperCase();
+      document.getElementById('userName').textContent = session.Name || '-';
+      document.getElementById('userPosition').textContent = session.Position || '-';
+      document.getElementById('userEmail').textContent = session.Email || '-';
+      document.getElementById('userDept').textContent = session.Department || '-';
+
+      }
+      const logoutBtn=document.getElementById('logoutBtn'); if(logoutBtn)logoutBtn.onclick=logout;
+      if(!document.getElementById('exportMonth')) return;
+      const mSel = document.getElementById('exportMonth'), ySel = document.getElementById('exportYear');
+      const now = new Date();
+      MONTHS.forEach((m,i) => { const o=document.createElement('option'); o.value=i+1; o.textContent=m; if(i+1===now.getMonth()+1) o.selected=true; mSel.appendChild(o); });
+      for (let y = now.getFullYear(); y >= now.getFullYear()-3; y--) { const o=document.createElement('option'); o.value=y; o.textContent=y; if(y===now.getFullYear()) o.selected=true; ySel.appendChild(o); }
+      mSel.addEventListener('change', refreshExportStatus);
+      ySel.addEventListener('change', refreshExportStatus);
+
+    }
+
+    async function loadMyExports() {
+      try { const r = await apiGet('getMyExportRequests', { email: session.Email }); myExports = Array.isArray(r) ? r : []; }
+      catch { myExports = []; }
+      refreshExportStatus();
+    }
+
+    // 📅 v6.3 เลือกช่วงรอบเองได้ทั้งวันเริ่มและวันจบ — ทับหรือเว้นแค่เตือน ไม่บล็อก
+    let periodInfo = null;
+    async function loadPeriodInfo() {
+      const year = parseInt(document.getElementById('exportYear').value);
+      const month = parseInt(document.getElementById('exportMonth').value);
+      const wrap = document.getElementById('cutoffWrap');
+      const sIn = document.getElementById('cutoffStart');
+      const eIn = document.getElementById('cutoffEnd');
+      const hint = document.getElementById('cutoffHint');
+      try {
+        periodInfo = await apiGet('getPeriodInfo', { email: session.Email, year, month });
+        if (!periodInfo || periodInfo.error) throw new Error('n/a');
+        sIn.value = periodInfo.expectedStart;
+        sIn.max = periodInfo.maxEnd;
+        eIn.max = periodInfo.maxEnd;
+        eIn.value = periodInfo.suggestedEnd;
+        hint.innerHTML = (periodInfo.hasSettled
+            ? `รอบก่อนปิดถึง <b>${periodInfo.lastSettledTH}</b> — ระบบแนะนำให้เริ่ม ${periodInfo.expectedStartTH}`
+            : `ยังไม่เคยปิดรอบ — เริ่มจากบิลเก่าสุดที่มี (${periodInfo.expectedStartTH})`) +
+          `<br>วันตัดยอดตามค่ากลางคือ${periodInfo.cutoffLabel} · เลือกเองได้ทั้งสองช่อง`;
+        sIn.oninput = checkPeriodRange;
+        eIn.oninput = checkPeriodRange;
+        checkPeriodRange();
+        wrap.style.display = 'block';
+      } catch { wrap.style.display = 'none'; periodInfo = null; }
+    }
+
+    // เตือนแบบสดๆ ถ้าทับรอบก่อนหรือมีวันหาย — คำนวณฝั่งหน้าเว็บ ไม่ต้องยิง server
+    function periodWarnings(startStr, endStr) {
+      const w = [];
+      if (!periodInfo || !startStr || !endStr) return w;
+      const day = 86400000;
+      const s = new Date(startStr), e = new Date(endStr);
+      const exp = new Date(periodInfo.expectedStart);
+      if (e < s) { w.push('❌ วันจบอยู่ก่อนวันเริ่ม'); return w; }
+      if (periodInfo.hasSettled && s < exp) {
+        w.push(`⚠️ ทับกับรอบก่อน ${Math.round((exp - s)/day)} วัน — ช่วงนั้นเบิกไปแล้ว อาจได้เงินซ้ำ`);
+      } else if (s > exp) {
+        w.push(`⚠️ มีวันหาย ${Math.round((s - exp)/day)} วัน — บิลช่วง ${fmtTH(periodInfo.expectedStart)} ถึง ${fmtTH(new Date(s - day))} จะไม่อยู่ในรอบไหนเลย`);
+      }
+      return w;
+    }
+
+    function fmtTH(v) {
+      const d = new Date(v);
+      return isNaN(d) ? '-' : d.toLocaleDateString('th-TH', { day:'numeric', month:'short', year:'numeric' });
+    }
+
+    function checkPeriodRange() {
+      const box = document.getElementById('cutoffWarn');
+      if (!box) return;
+      const w = periodWarnings(document.getElementById('cutoffStart').value,
+                               document.getElementById('cutoffEnd').value);
+      box.innerHTML = w.length
+        ? w.map(x => `<div class="warn-box" style="margin:0 0 6px;font-size:12.5px;">${x}</div>`).join('')
+        : '';
+    }
+
+    function refreshExportStatus() {
+      const year = parseInt(document.getElementById('exportYear').value);
+      const month = parseInt(document.getElementById('exportMonth').value);
+      const ex = myExports.find(x => Number(x.Year)===year && Number(x.Month)===month);
+      const box = document.getElementById('exportStatusBox');
+      const act = document.getElementById('exportActions');
+      const cw = document.getElementById('cutoffWrap');
+
+      // เลือกวันตัดได้เฉพาะตอนที่ยังไม่ได้ขอ (หรือถูกปฏิเสธมา)
+      const canPickCutoff = !ex || ex.OverallStatus === 'Rejected';
+      if (canPickCutoff) loadPeriodInfo(); else cw.style.display = 'none';
+
+      if (!ex || ex.OverallStatus === 'Rejected') {
+        box.innerHTML = ex
+          ? `<div class="bad-box"><b>❌ ไม่อนุมัติ</b><br><span style="font-weight:400;">${ex.GMRemark || ex.ManagerRemark || ex.SeniorRemark || 'ไม่ได้ระบุเหตุผล'}</span></div>`
+          : `<div class="info-box">📋 ยังไม่ได้ขออนุมัติสำหรับ <b>${MONTHS[month-1]} ${year}</b></div>`;
+        act.innerHTML = `
+          <button class="btn btn-primary" onclick="requestApproval()">✅ ขออนุมัติเพื่อ Export</button>
+          <button class="btn btn-secondary" onclick="downloadDraft()">👀 ดูตัวอย่างก่อน (ยังใช้เบิกไม่ได้)</button>`;
+
+      } else if (ex.OverallStatus === 'Approved') {
+        // ✨ v6.0 ปิดลูป — บอกด้วยว่าบัญชีจ่ายเงินแล้วหรือยัง
+        const paid = !!ex.PaidAt;
+        box.innerHTML = `
+          <div class="ok-box"><b>✅ อนุมัติแล้ว</b><br>
+            <span style="font-weight:400;">${ex.ItemCount} รายการ · ${Number(ex.TotalAmount||0).toLocaleString()} บาท</span>
+            ${periodTxt(ex)}</div>
+          ${paid
+            ? `<div class="ok-box" style="background:#ECFDF5;border-color:#6EE7B7;">
+                 💵 <b>บัญชีโอนเงินแล้ว</b><br>
+                 <span style="font-weight:400;font-size:12px;">${new Date(ex.PaidAt).toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'})}</span>
+               </div>`
+            : `<div class="info-box" style="margin-bottom:0;">⏳ รอฝ่ายบัญชีโอนเงิน</div>`}`;
+        act.innerHTML = `
+          <button class="btn btn-primary" onclick="downloadFinal('${ex.ID}')">📥 ดาวน์โหลด Excel ตัวจริง</button>
+          <button class="btn btn-secondary" onclick="downloadDraft()">👀 ดูตัวอย่าง</button>`;
+
+      } else {
+        const who = String(ex.GMEmail || ex.SeniorEmail || ex.ManagerEmail || '').split('@')[0];
+        box.innerHTML = `<div class="warn-box"><b>⏳ รออนุมัติ</b><br>
+          <span style="font-weight:400;font-size:12.5px;">อยู่ที่ ${who || 'ผู้อนุมัติ'} · ${ex.ItemCount} รายการ · ${Number(ex.TotalAmount||0).toLocaleString()} บาท</span>
+          ${periodTxt(ex)}</div>`;
+        act.innerHTML = `<button class="btn btn-secondary" onclick="downloadDraft()">👀 ดูตัวอย่างก่อน (ยังใช้เบิกไม่ได้)</button>`;
+      }
+    }
+
+    // แสดงช่วงวันของรอบใต้กล่องสถานะ
+    function periodTxt(ex) {
+      if (!ex || !ex.PeriodStart || !ex.PeriodEnd) return '';
+      const f = s => new Date(s).toLocaleDateString('th-TH', { day:'numeric', month:'short', year:'2-digit' });
+      return `<br><span style="font-weight:400;font-size:11.5px;opacity:.8;">📅 รอบ ${f(ex.PeriodStart)} – ${f(ex.PeriodEnd)}</span>`;
+    }
+
+    window.requestApproval = async () => {
+      const year = parseInt(document.getElementById('exportYear').value);
+      const month = parseInt(document.getElementById('exportMonth').value);
+      const periodStart = (document.getElementById('cutoffStart') || {}).value || '';
+      const periodEnd   = (document.getElementById('cutoffEnd') || {}).value || '';
+
+      if (periodStart && periodEnd) {
+        if (new Date(periodEnd) < new Date(periodStart)) return showToast('วันจบอยู่ก่อนวันเริ่ม', 'error');
+        const w = periodWarnings(periodStart, periodEnd);
+        let msg = `ส่งรอบ ${fmtTH(periodStart)} – ${fmtTH(periodEnd)}\n\n`;
+        if (w.length) msg += w.join('\n') + '\n\nยืนยันส่งทั้งที่มีคำเตือน?';
+        else msg += 'รายการหลังจากวันนี้จะไปอยู่รอบถัดไป\nยืนยันส่งขออนุมัติ?';
+        if (!confirm(msg)) return;
+      }
+
+      showLoading('กำลังส่งคำขอ...');
+      try {
+        const r = await apiPost('requestExportApproval', {
+          staffEmail: session.Email, year, month, periodStart, periodEnd, requesterEmail: session.Email
+        });
+        hideLoading();
+        if (r.error) throw new Error(r.error);
+        showToast(r.auto
+          ? '✅ ผ่านอัตโนมัติ — ดาวน์โหลด Excel ได้เลย'
+          : 'ส่งคำขอแล้ว รออนุมัติ ✅', 'success');
+        await loadMyExports();
+      } catch (err) { hideLoading(); showToast(err.message, 'error'); }
+    };
+
+    window.downloadDraft = async () => {
+      const year = parseInt(document.getElementById('exportYear').value);
+      const month = parseInt(document.getElementById('exportMonth').value);
+      showLoading('กำลังสร้างตัวอย่าง...');
+      try {
+        // ส่งช่วงวันที่เพิ่งเลือกไปด้วย ไม่งั้นตัวอย่างจะใช้เดือนปฏิทินแทน
+        const periodStart = (document.getElementById('cutoffStart') || {}).value || '';
+        const periodEnd   = (document.getElementById('cutoffEnd') || {}).value || '';
+        const r = await apiPost('downloadDraftExport', {
+          staffEmail: session.Email, year, month, periodStart, periodEnd, requesterEmail: session.Email });
+        hideLoading();
+        if (r.error) throw new Error(r.error);
+        dl(r);
+        showToast(`ตัวอย่าง ${esc(r.periodLabel || '')} · ${esc(r.itemCount)} รายการ · ${Number(r.totalAmount||0).toLocaleString()} บาท`, 'success');
+      } catch (err) { hideLoading(); showToast(err.message, 'error'); }
+    };
+
+    window.downloadFinal = async (exportId) => {
+      showLoading('กำลังดาวน์โหลด...');
+      try {
+        const r = await apiPost('downloadFinalExport', { exportId, requesterEmail: session.Email });
+        hideLoading();
+        if (r.error) throw new Error(r.error);
+        dl(r);
+        if (r.drift) {
+          alert('⚠️ ตัวเลขเปลี่ยนไปหลังจากได้รับอนุมัติ\n\n' +
+            'ตอนอนุมัติ: ' + r.drift.approvedCount + ' รายการ · ' + Number(r.drift.approvedTotal).toLocaleString() + ' บาท\n' +
+            'ตอนนี้: ' + r.drift.currentCount + ' รายการ · ' + Number(r.drift.currentTotal).toLocaleString() + ' บาท\n\n' +
+            'กรุณาตรวจสอบกับหัวหน้าก่อนส่งบัญชี');
+        }
+        showToast('ดาวน์โหลดสำเร็จ ✅', 'success');
+      } catch (err) { hideLoading(); showToast(err.message, 'error'); }
+    };
+
+    function dl(result) {
+      if (!result.base64) throw new Error('ไม่มีข้อมูลไฟล์');
+      const bytes = atob(result.base64);
+      const arr = new Uint8Array(bytes.length);
+      for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+      const blob = new Blob([arr], { type: result.mimeType || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = result.filename || 'export.xlsx';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
+
+    // ── Signature pad ──
+    async function initSignature() {
+      const canvas = document.getElementById('sigCanvas');
+      if (!canvas) return;
+      try {
+        const r = await getMySignature(session.Email);
+        if (r && r.hasSignature && r.dataUrl) {
+          document.getElementById('currentSig').src = r.dataUrl;
+          document.getElementById('currentSigWrap').style.display = 'block';
+        }
+      } catch {}
+      const ctx = canvas.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+      ctx.scale(dpr, dpr);
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#0F172A'; ctx.lineWidth = 2.5;
+      let drawing = false, empty = true;
+      const ph = document.getElementById('sigPlaceholder');
+      const pos = e => { const r = canvas.getBoundingClientRect(); return { x:(e.touches?e.touches[0].clientX:e.clientX)-r.left, y:(e.touches?e.touches[0].clientY:e.clientY)-r.top }; };
+      const start = e => { drawing = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); e.preventDefault(); };
+      const draw = e => { if(!drawing) return; const p = pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); empty=false; ph.style.display='none'; e.preventDefault(); };
+      const end = () => drawing = false;
+      canvas.addEventListener('mousedown',start); canvas.addEventListener('mousemove',draw);
+      canvas.addEventListener('mouseup',end); canvas.addEventListener('mouseout',end);
+      canvas.addEventListener('touchstart',start,{passive:false}); canvas.addEventListener('touchmove',draw,{passive:false}); canvas.addEventListener('touchend',end);
+      sigPad = {
+        isEmpty: () => empty,
+        clear: () => { ctx.clearRect(0,0,canvas.width,canvas.height); empty=true; ph.style.display='block'; },
+        toDataURL: () => canvas.toDataURL('image/png')
+      };
+      document.getElementById('clearSigBtn').addEventListener('click', () => sigPad.clear());
+      document.getElementById('saveSigBtn').addEventListener('click', onSaveSignature);
+      document.getElementById('sigUpload').addEventListener('change', e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (file.size > 2*1024*1024) return showToast('ไฟล์ใหญ่เกิน 2 MB', 'error');
+        const reader = new FileReader();
+        reader.onload = () => {
+          const img = new Image();
+          img.onload = () => {
+            sigPad.clear();
+            const W = canvas.getBoundingClientRect().width, H = 150;
+            const ratio = Math.min(W/img.width, H/img.height);
+            const w = img.width*ratio, h = img.height*ratio;
+            ctx.drawImage(img, (W-w)/2, (H-h)/2, w, h);
+            empty = false; ph.style.display = 'none';
+            showToast('โหลดรูปแล้ว — กด "บันทึกลายเซ็น"', 'success');
+          };
+          img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+        e.target.value = '';
+      });
+    }
+
+    async function onSaveSignature() {
+      if (!sigPad || sigPad.isEmpty()) return showToast('กรุณาเซ็นหรืออัปโหลดก่อน', 'error');
+      const base64 = sigPad.toDataURL();
+      showLoading('กำลังบันทึกลายเซ็น...');
+      try {
+        const r = await saveSignature(session.Email, base64);
+        hideLoading();
+        if (r && r.error) throw new Error(r.error);
+        showToast('บันทึกลายเซ็นสำเร็จ ✅', 'success');
+        document.getElementById('currentSig').src = base64;
+        document.getElementById('currentSigWrap').style.display = 'block';
+        sigPad.clear();
+      } catch (err) { hideLoading(); showToast(err.message, 'error'); }
+    }
+
+    if (session) { init(); renderBottomNav(document.getElementById('exportMonth')?'periods':'profile'); if(document.getElementById('exportMonth'))loadMyExports(); if(document.getElementById('sigCanvas'))initSignature(); }

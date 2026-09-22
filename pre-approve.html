@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>ขอ Pre-Approve — EXION Expense</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#B7081D">
+  <link rel="stylesheet" href="css/experience.css">
+</head>
+<body>
+  <div class="header">
+    <button class="back" aria-label="ย้อนกลับ" onclick="location.href='index.html'" id="backBtn"></button>
+    <h1><img src="icons/logo.png" alt="EXION" class="logo"><span style="font-size:13px;font-weight:700;margin-left:6px;">ขอ Pre-Approve</span></h1>
+  </div>
+
+  <div class="container">
+    <div class="hero" style="background:linear-gradient(135deg,#F59E0B,#D97706);">
+      <div class="hero-name" style="font-size:20px;">📋 ขออนุมัติงบล่วงหน้า</div>
+      <div class="hero-sub" style="line-height:1.6;">
+        สำหรับ <b>ค่ารับรอง</b> และ <b>กอล์ฟ</b> เท่านั้น<br>
+        อนุมัติแล้ว → ใช้ได้ภายใน <b>30 วัน</b> → กลับมาส่งใบเสร็จที่หน้า “Pre-Approve ของฉัน”
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="sec-label" style="margin:0 0 12px;">รายละเอียดการนัด</div>
+
+      <div class="field">
+        <label>ประเภท <span class="required">*</span></label>
+        <select id="category">
+          <option value="">— เลือกประเภท —</option>
+          <option value="ENT">🍽 ค่ารับรองลูกค้า — Entertainment</option>
+          <option value="GOLF">⛳ ค่ารับรอง (กอล์ฟ) — Golf</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>วันที่นัด / วางแผน <span class="required">*</span></label>
+        <input type="date" id="expenseDate">
+      </div>
+
+      <div class="field">
+        <label>สถานที่ <span class="required">*</span></label>
+        <input type="text" id="venue" placeholder="ชื่อร้าน / สนามกอล์ฟ">
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="sec-label" style="margin:0 0 12px;">ฝ่ายที่รับรอง</div>
+
+      <div class="field">
+        <label>ประเภท <span class="required">*</span></label>
+        <div class="seg" id="custTypeSeg">
+          <button type="button" data-v="Customer">👤 Customer</button>
+          <button type="button" data-v="Principle">🏢 Principle</button>
+          <button type="button" data-v="Other Customer">👥 Other Cust.</button>
+          <button type="button" data-v="Other Principle">🏛 Other Prin.</button>
+        </div>
+        <input type="hidden" id="customerType">
+      </div>
+
+      <div class="field">
+        <label>ชื่อลูกค้า / Principle <span class="required">*</span></label>
+        <input type="text" id="customer" placeholder="ชื่อบริษัท" list="customerList">
+      </div>
+
+      <div class="field">
+        <label>ผู้ติดต่อ</label>
+        <input type="text" id="customerContact" placeholder="ชื่อ ตำแหน่ง">
+      </div>
+
+      <div class="field">
+        <label>เลข Job <span class="optional-tag">ไม่บังคับ</span></label>
+        <input type="text" id="jobNo" placeholder="เช่น J2026-0142">
+      </div>
+
+      <div class="field">
+        <label>โอกาส / วัตถุประสงค์ <span class="required">*</span></label>
+        <textarea id="occasion" rows="3" placeholder="เช่น พบเพื่อ Demo โครงการ Q3"></textarea>
+      </div>
+
+      <div class="field" style="margin-bottom:0;">
+        <label>ผู้ร่วม (คาดการณ์)</label>
+        <textarea id="attendees" rows="2" placeholder="ระบุชื่อ + บริษัท"></textarea>
+      </div>
+    </div>
+
+    <div class="card budget-card">
+      <div class="sec-label" style="margin:0 0 10px;color:#991B1B;">งบประมาณ</div>
+      <div class="field" style="margin-bottom:8px;">
+        <label style="color:#991B1B;">งบคาดการณ์ (THB) <span class="required">*</span></label>
+        <input type="number" id="budget" step="0.01" min="0" placeholder="0.00" inputmode="decimal" class="big-num">
+      </div>
+      <div class="warn-box" style="margin:0;">⚠️ ถ้ายอดใช้จริงเกินงบ หัวหน้าต้องอนุมัติซ้ำอีกรอบ</div>
+    </div>
+
+    <button class="btn btn-primary" id="submitBtn">📋 ส่งขอ Pre-Approve</button>
+  </div>
+
+  <datalist id="customerList"></datalist>
+
+  <script src="js/config.js"></script>
+  <script src="js/icons.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/experience.js"></script>
+  <script>
+    const session = requireLogin();
+
+    async function init() {
+      const bb = document.getElementById('backBtn');
+      if (bb && typeof icon === 'function') bb.innerHTML = icon('back');
+      document.getElementById('expenseDate').value = toYMD(new Date(Date.now() + 86400000));   // พรุ่งนี้ ตามเวลาไทย
+
+      document.querySelectorAll('#custTypeSeg button').forEach(b => {
+        b.addEventListener('click', () => {
+          document.querySelectorAll('#custTypeSeg button').forEach(x => x.classList.remove('on'));
+          b.classList.add('on');
+          document.getElementById('customerType').value = b.dataset.v;
+        });
+      });
+
+      try {
+        const customers = await fetchCustomerHistory(session.Email);
+        const dl = document.getElementById('customerList');
+        (customers || []).forEach(c => { const o=document.createElement('option'); o.value=c; dl.appendChild(o); });
+      } catch {}
+
+      document.getElementById('submitBtn').addEventListener('click', onSubmit);
+    }
+
+    async function onSubmit() {
+      const category = document.getElementById('category').value;
+      const expenseDate = document.getElementById('expenseDate').value;
+      const venue = document.getElementById('venue').value.trim();
+      const customerType = document.getElementById('customerType').value;
+      const customerName = document.getElementById('customer').value.trim();
+      const occasion = document.getElementById('occasion').value.trim();
+      const budget = parseFloat(document.getElementById('budget').value) || 0;
+      const customerContact = document.getElementById('customerContact').value.trim();
+      const attendees = document.getElementById('attendees').value.trim();
+
+      if (!category) return showToast('เลือกประเภท', 'error');
+      if (!expenseDate) return showToast('ใส่วันที่', 'error');
+      if (!venue) return showToast('ใส่สถานที่', 'error');
+      if (!customerType) return showToast('เลือกประเภทลูกค้า / Principle', 'error');
+      if (!customerName) return showToast('ใส่ชื่อลูกค้า', 'error');
+      if (!occasion) return showToast('ใส่โอกาส', 'error');
+      if (budget <= 0) return showToast('ใส่งบประมาณ', 'error');
+
+      const customer = '[' + customerType + '] ' + customerName;
+      const btn = document.getElementById('submitBtn');
+      btn.disabled = true;
+      showLoading('กำลังส่ง Pre-Approve...');
+      try {
+        const result = await submitPreApprove({
+          staffEmail: session.Email, category, expenseDate, venue,
+          customer, customerContact, occasion, attendees, budget,
+          jobNo: (document.getElementById('jobNo') || {}).value || ''
+        });
+        if (result.error) throw new Error(result.error);
+        hideLoading();
+        showToast('ส่งสำเร็จ! หัวหน้าได้รับอีเมลแล้ว ✅', 'success');
+        setTimeout(() => location.href = 'pre-approves.html', 1400);
+      } catch (err) {
+        hideLoading(); showToast(err.message, 'error');
+        btn.disabled = false;
+      }
+    }
+
+    if (session) { init(); renderBottomNav(''); }
+  </script>
+</body>
+</html>

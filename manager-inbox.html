@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>รออนุมัติ — EXION</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#B7081D">
+  <link rel="stylesheet" href="css/experience.css">
+</head>
+<body>
+  <div class="header">
+    <button class="back" aria-label="ย้อนกลับ" onclick="location.href='index.html'" id="backBtn"></button>
+    <h1><img src="icons/logo.png" alt="EXION" class="logo"><span style="font-size:13px;font-weight:700;margin-left:6px;">รออนุมัติ (หัวหน้า)</span></h1>
+  </div>
+
+  <div id="stickyBar" class="sticky-bar" style="display:none;"></div>
+
+  <div class="container">
+    <div id="filterCard" class="card" style="display:none;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div class="field" style="margin:0;"><label>พนักงาน</label><select id="fStaff"><option value="">ทุกคน</option></select></div>
+        <div class="field" style="margin:0;"><label>ประเภท</label><select id="fCat"><option value="">ทุกประเภท</option></select></div>
+      </div>
+      <div class="field" style="margin:10px 0 0;">
+        <input type="search" id="fSearch" placeholder="🔍 ค้นหา ชื่อ / ลูกค้า / สถานที่">
+      </div>
+    </div>
+    <div id="list" class="loading"><div class="spinner"></div></div>
+  </div>
+
+  <div id="modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-head">
+        <h3 id="modalTitle">รายละเอียด</h3>
+        <button class="modal-close" aria-label="ปิด" onclick="closeModal()" id="closeBtn">✕</button>
+      </div>
+      <div id="modalContent"></div>
+    </div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/icons.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/experience.js"></script>
+  <script>
+    const session = requireLogin();
+    let pending = [];
+    let exportPending = [];
+    let mySig = null;
+
+    const CAT_TH = catMap();   // 🔴 รวมไว้ที่ js/app.js แล้ว ห้ามก๊อปตารางมาไว้ในหน้าอีก
+    const CAT_IC = CAT_ICON_TH;
+
+    function setI(id, n) { const el = document.getElementById(id); if (el && typeof icon === 'function') el.innerHTML = icon(n); }
+
+    async function load() {
+      setI('backBtn', 'back');
+      try {
+        const [result, sig, exps] = await Promise.all([
+          fetchManagerInbox(session.Email),
+          getMySignature(session.Email).catch(() => ({ hasSignature: false })),
+          apiGet('getExportApprovalInbox', { email: session.Email }).catch(() => [])
+        ]);
+        exportPending = Array.isArray(exps) ? exps : [];
+        mySig = sig;
+        if (result && result.error) throw new Error(result.error);
+        pending = Array.isArray(result) ? result : [];
+        render();
+      } catch (err) {
+        renderError('list', err.message, load);
+        renderBottomNav('inbox');
+      }
+    }
+
+    /** เติมตัวเลือกในดรอปดาวน์จากข้อมูลจริง — โชว์เฉพาะตอนมีของเยอะพอ */
+    function buildFilters() {
+      const card = document.getElementById('filterCard');
+      if (pending.length < 6) { card.style.display = 'none'; return; }
+      card.style.display = 'block';
+
+      const sSel = document.getElementById('fStaff'), cSel = document.getElementById('fCat');
+      if (sSel.dataset.built) return;
+      sSel.dataset.built = '1';
+
+      const staff = [...new Set(pending.map(r => r.StaffName).filter(Boolean))].sort();
+      staff.forEach(n => { const o = document.createElement('option'); o.value = n; o.textContent = n; sSel.appendChild(o); });
+
+      const cats = [...new Set(pending.map(r => r.Category).filter(Boolean))].sort();
+      cats.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = (CAT_IC[c]||'') + ' ' + (CAT_TH[c]||c); cSel.appendChild(o); });
+
+      ['fStaff','fCat'].forEach(id => document.getElementById(id).addEventListener('change', render));
+      document.getElementById('fSearch').addEventListener('input', render);
+    }
+
+    function getVisible() {
+      const st = (document.getElementById('fStaff')||{}).value || '';
+      const ct = (document.getElementById('fCat')||{}).value || '';
+      const q  = ((document.getElementById('fSearch')||{}).value || '').trim().toLowerCase();
+      return pending.filter(r => {
+        if (st && r.StaffName !== st) return false;
+        if (ct && r.Category !== ct) return false;
+        if (q) {
+          const hay = [r.StaffName, r.Customer, r.Venue, r.Occasion, r.Department].join(' ').toLowerCase();
+          if (hay.indexOf(q) < 0) return false;
+        }
+        return true;
+      });
+    }
+
+    function render() {
+      const list = document.getElementById('list');
+      list.classList.remove('loading');
+      buildFilters();
+
+      if (pending.length === 0 && exportPending.length === 0) {
+        list.innerHTML = `<div class="empty"><div class="icon-wrap">🎉</div><div class="title">เคลียร์แล้ว!</div><div class="sub">ไม่มีคำขอรออนุมัติ</div></div>`;
+        document.getElementById('stickyBar').style.display = 'none';
+        document.getElementById('filterCard').style.display = 'none';
+        renderBottomNav('inbox');
+        return;
+      }
+
+      const shown = getVisible();
+      const total = shown.reduce((s,r) => s + (Number(r.Amount) || Number(r.PreApproveBudget) || 0), 0);
+
+      // ⚠️ ถ้าไม่มีคำขอรายรายการ แต่ยังมี Export ค้าง ต้องไม่ return ทิ้ง
+      //    ไม่งั้นหัวหน้ามองไม่เห็นคำขอ Export เลย → พนักงานไม่ได้เงิน
+      if (shown.length === 0 && !exportPending.length) {
+        list.innerHTML = `<div class="empty"><div class="icon-wrap">🔍</div>
+          <div class="title">ไม่พบรายการที่ตรงกับตัวกรอง</div>
+          <button class="btn btn-secondary btn-sm" style="margin-top:14px;max-width:200px;" onclick="clearInboxFilters()">🗑 ล้างตัวกรอง</button></div>`;
+        renderBottomNav('inbox');
+        return;
+      }
+
+      // Group by batch
+      const batches = {};
+      shown.forEach(r => {
+        const idx = pending.indexOf(r);   // index ของรายการจริง ไม่ใช่ index หลังกรอง
+        const bid = r.BatchID || r.ID;
+        if (!batches[bid]) batches[bid] = { items: [], staff: r.StaffName, dept: r.Department, total: 0, isPre: !!r.PreApproveBudget };
+        batches[bid].items.push({ ...r, _idx: idx });
+        batches[bid].total += Number(r.Amount) || Number(r.PreApproveBudget) || 0;
+      });
+
+      document.getElementById('stickyBar').innerHTML =
+        `เหลือ <b>${shown.length}</b> รายการ · รวม <b>${Math.round(total).toLocaleString()}</b> บาท`;
+      document.getElementById('stickyBar').style.display = 'block';
+
+      let html = `<div class="count-hero">
+        <div class="lbl">รออนุมัติ</div>
+        <div class="num">${shown.length}</div>
+        <div class="sub">${Object.keys(batches).length} ชุด • รวม ${Math.round(total).toLocaleString()} THB</div>
+      </div>`;
+
+      // ✨ v6.0 คำขอ Export เคยแจ้งทางอีเมลอย่างเดียว หัวหน้าเปิดแอปแล้วไม่เห็นอะไรเลย
+      if (exportPending.length) {
+        html += `<div class="sec-label" style="color:var(--accent);">📊 คำขอ Export รออนุมัติ (${exportPending.length})</div>`;
+        exportPending.forEach(ex => {
+          const days = Math.floor((Date.now() - new Date(ex.RequestedAt).getTime()) / 86400000);
+          html += `<a href="export-review.html?id=${ex.ID}" class="req-card warn" style="text-decoration:none;display:block;">
+            <div class="ri-top">
+              <span class="ri-cat">📊 ${ex.StaffName}</span>
+              ${days >= 2 ? `<span class="pill bad">ค้าง ${days} วัน</span>` : '<span class="pill warn">ใหม่</span>'}
+              <span class="ri-amt">${Number(ex.TotalAmount||0).toLocaleString()} ฿</span>
+            </div>
+            <div class="ri-meta">ใบเบิกเดือน ${ex.Month}/${ex.Year} · ${ex.ItemCount} รายการ · แตะเพื่อตรวจสอบ</div>
+          </a>`;
+        });
+        html += `<div class="sec-label">คำขอเบิกรายรายการ</div>`;
+      }
+
+      if (!mySig.hasSignature) {
+        html += `<div class="warn-box"><div class="t">✍️ ยังไม่มีลายเซ็นบันทึกไว้</div>
+          <div style="font-size:12px;">ตั้งลายเซ็น 1 ครั้งใน Profile → Approve เร็วขึ้น ไม่ต้องเซ็นทุกครั้ง</div>
+          <a href="profile.html" style="display:inline-block;margin-top:8px;font-weight:700;font-size:12px;">→ ไปตั้งลายเซ็น</a></div>`;
+      }
+
+      Object.entries(batches).forEach(([bid, b]) => {
+        html += `<div class="batch-card">
+          <div class="batch-head">
+            <div>
+              <div class="who">${b.staff}</div>
+              <div class="sub">${b.dept} • ${b.items.length} รายการ${b.isPre ? ' • 🍽️ Pre-Approve' : ''}</div>
+            </div>
+            <div class="amt">${Math.round(b.total).toLocaleString()}</div>
+          </div>`;
+        b.items.forEach(r => {
+          const amt = Number(r.Amount) || Number(r.PreApproveBudget) || 0;
+          html += `<div class="request-item" onclick="showDetail(${esc(r._idx)})">
+            <div class="cat-icon" style="background:#FEF3C7;color:#92400E;">${CAT_IC[r.Category] || '📦'}</div>
+            <div class="info">
+              <div class="title">${CAT_TH[r.Category] || r.Category}${b.isPre ? ' (งบ)' : ''}</div>
+              <div class="meta">${formatDate(r.ExpenseDate)}${r.Venue ? ' • ' + r.Venue : ''}</div>
+            </div>
+            <div class="right"><div class="amount">${Math.round(amt).toLocaleString()}</div></div>
+          </div>`;
+        });
+        html += `<div class="btn-row" style="margin-top:10px;">
+          <button class="btn btn-primary btn-sm" style="flex:1;" onclick="approveBatch('${bid}')">✅ อนุมัติทั้งชุด</button>
+          <button class="btn btn-sm" style="flex:1;background:var(--danger);color:white;" onclick="rejectBatch('${bid}')">❌ ไม่อนุมัติ</button>
+        </div></div>`;
+      });
+
+      list.innerHTML = html;
+      renderBottomNav('inbox');
+    }
+
+    function showDetail(idx) {
+      const r = pending[idx];
+      const isPre = !!r.PreApproveBudget;
+      document.getElementById('modalTitle').textContent = r.StaffName + ' — ' + (CAT_TH[r.Category] || r.Category);
+
+      const rows = [
+        ['ID', r.ID],
+        ['ประเภท', (CAT_TH[r.Category] || r.Category) + (isPre ? ' (Pre-Approve)' : '')],
+        ['วันที่', formatDate(r.ExpenseDate)],
+        ['สถานที่', r.Venue || '-'],
+        ['โอกาส', r.Occasion || '-'],
+        ['ผู้ร่วม', r.Attendees || '-']
+      ];
+      if (r.Origin) rows.push(['ต้นทาง', r.Origin]);
+      if (r.Destination) rows.push(['ปลายทาง', r.Destination]);
+      if (r.Customer) rows.push(['ลูกค้า', r.Customer + (r.CustomerContact ? ' (' + r.CustomerContact + ')' : '')]);
+      if (r.Mileage_KM) rows.push(['ระยะทาง', r.Mileage_KM + ' กม.']);
+
+      const amount = r.PreApproveBudget || r.Amount;
+      let html = `<div class="detail-row">
+        <div class="key">${isPre ? 'งบประมาณ' : 'จำนวนเงิน'}</div>
+        <div class="val big">${Math.round(Number(amount)).toLocaleString()} <span style="font-size:13px;color:var(--gray-500);font-weight:600;">THB</span></div>
+      </div>` + rows.map(([k,v]) => `<div class="detail-row"><div class="key">${k}</div><div class="val">${v}</div></div>`).join('');
+
+      // Receipts
+      let urls = [];
+      try { urls = JSON.parse(r.ReceiptURLs || '[]'); } catch {}
+      if (urls.length === 0 && r.ReceiptURL) urls = [r.ReceiptURL];
+      if (urls.length > 0) {
+        html += `<div style="margin-top:16px;">
+          <div style="font-size:13px;font-weight:700;margin-bottom:8px;">📎 ใบเสร็จ (${urls.length})</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;">`;
+        for (let i = 0; i < urls.length; i++) {
+          html += `<button class="btn btn-secondary btn-sm" onclick="loadReceipt('${esc(r.ID)}',${i})">🔒 ไฟล์ ${i+1}</button>`;
+        }
+        html += `</div><img id="rcptImg" class="preview-img" alt="ใบเสร็จ" style="display:none;"></div>`;
+      }
+
+      html += `<div class="field" style="margin-top:18px;">
+        <label>หมายเหตุ <span style="color:var(--gray-400);font-weight:400;">(ถ้ามี)</span></label>
+        <textarea id="remark" placeholder="เช่น อนุมัติภายในงบ Q3" rows="2"></textarea>
+      </div>`;
+
+      // Signature — use saved if available
+      if (mySig.hasSignature) {
+        html += `<div class="saved-sig"><img src="${mySig.dataUrl}" alt="sig"><div>✅ ใช้ลายเซ็นที่บันทึกไว้อัตโนมัติ</div></div>`;
+      } else {
+        html += `<div class="field" style="margin-top:14px;">
+          <label>ลายเซ็น <span class="required">*</span></label>
+          <div class="sig-box">
+            <canvas id="sigCanvas" class="sig-canvas"></canvas>
+            <span class="sig-placeholder">เซ็นที่นี่</span>
+          </div>
+          <div class="sig-actions"><span>เซ็นเพื่ออนุมัติ</span><button type="button" class="sig-clear" onclick="clearSig()">ล้าง</button></div>
+        </div>`;
+      }
+
+      html += `<div class="btn-row" style="margin-top:14px;">
+        <button class="btn btn-primary" style="flex:1;" onclick="decide('${esc(r.ID)}','Approved')">✅ Approve</button>
+        <button class="btn" style="flex:1;background:var(--danger);color:white;" onclick="decide('${esc(r.ID)}','Rejected')">❌ ไม่อนุมัติ</button>
+      </div>`;
+
+      document.getElementById('modalContent').innerHTML = html;
+      document.getElementById('modal').classList.add('show');
+      if (!mySig.hasSignature) setTimeout(initSigPad, 80);
+    }
+
+    let sigPad = null;
+    function initSigPad() {
+      const c = document.getElementById('sigCanvas');
+      if (!c) return;
+      const ctx = c.getContext('2d');
+      const dpr = window.devicePixelRatio || 1;
+      const rect = c.getBoundingClientRect();
+      c.width = rect.width * dpr; c.height = rect.height * dpr;
+      ctx.scale(dpr, dpr);
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#0F172A'; ctx.lineWidth = 2.5;
+      let draw = false, empty = true;
+      const ph = c.parentElement.querySelector('.sig-placeholder');
+      const pos = e => { const r = c.getBoundingClientRect(); return { x:(e.touches?e.touches[0].clientX:e.clientX)-r.left, y:(e.touches?e.touches[0].clientY:e.clientY)-r.top }; };
+      const st = e => { draw = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); e.preventDefault(); };
+      const mv = e => { if(!draw) return; const p = pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); empty = false; if(ph) ph.style.display='none'; e.preventDefault(); };
+      const en = () => draw = false;
+      c.addEventListener('mousedown',st); c.addEventListener('mousemove',mv); c.addEventListener('mouseup',en); c.addEventListener('mouseout',en);
+      c.addEventListener('touchstart',st); c.addEventListener('touchmove',mv); c.addEventListener('touchend',en);
+      sigPad = { isEmpty:()=>empty, clear:()=>{ctx.clearRect(0,0,c.width,c.height);empty=true;if(ph)ph.style.display='block';}, toDataURL:()=>c.toDataURL('image/png') };
+    }
+    window.clearSig = () => sigPad && sigPad.clear();
+
+    async function loadReceipt(id, fileIndex) {
+      showLoading('โหลดใบเสร็จ...');
+      try {
+        const r = await fetchReceiptImage(id, session.Email, fileIndex);
+        hideLoading();
+        if (r.error) throw new Error(r.error);
+        const img = document.getElementById('rcptImg');
+        img.src = r.dataUrl; img.style.display = 'block';
+        img.onclick = () => openImageViewer(r.dataUrl, 'แตะ 2 ครั้งเพื่อซูม');
+      } catch (err) { hideLoading(); showToast(err.message, 'error'); }
+    }
+
+    async function decide(id, decision) {
+      const remark = (document.getElementById('remark')?.value || '').trim();
+      let signatureBase64 = '';
+      if (decision === 'Approved' && !mySig.hasSignature) {
+        if (!sigPad || sigPad.isEmpty()) return showToast('กรุณาเซ็นชื่อก่อน', 'error');
+        signatureBase64 = sigPad.toDataURL();
+      }
+      if (decision === 'Rejected' && !remark) return showToast('ระบุเหตุผลที่ปฏิเสธ', 'error');
+      if (!confirm(decision === 'Approved' ? 'ยืนยันอนุมัติ?' : 'ยืนยันปฏิเสธ?')) return;
+      showLoading(decision === 'Approved' ? 'กำลังอนุมัติ...' : 'กำลังปฏิเสธ...');
+      try {
+        const result = await managerApprove({ id, decision, remark, approverEmail: session.Email, signatureBase64 });
+        hideLoading();
+        if (result && result.error) throw new Error(result.error);
+        showToast(decision === 'Approved' ? '✅ อนุมัติแล้ว' : '❌ ปฏิเสธแล้ว', 'success');
+        closeModal();
+        load();
+      } catch (err) { hideLoading(); showToast(err.message, 'error'); }
+    }
+
+    window.approveBatch = async (bid) => {
+      const items = pending.filter(r => (r.BatchID || r.ID) === bid);
+      if (!mySig.hasSignature) {
+        showToast('ตั้งลายเซ็นใน Profile ก่อน เพื่อ approve ทั้งชุด', 'error');
+        return showDetail(pending.indexOf(items[0]));
+      }
+      const total = items.reduce((s,r) => s + (Number(r.Amount)||0), 0);
+      const who = items[0] ? (items[0].StaffName || '') : '';
+      if (!confirm(`อนุมัติทั้ง ${items.length} รายการของ ${who}\nรวม ${Math.round(total).toLocaleString()} บาท ?`)) return;
+      try {
+        await runBatch(items, r => managerApprove({ id: r.ID, decision: 'Approved', remark: '', approverEmail: session.Email }), 'อนุมัติ');
+      } finally { load(); }
+    };
+
+    window.rejectBatch = async (bid) => {
+      const items = pending.filter(r => (r.BatchID || r.ID) === bid);
+      const total = items.reduce((s,r) => s + (Number(r.Amount)||0), 0);
+      const who = items[0] ? (items[0].StaffName || '') : '';
+      const remark = prompt('เหตุผลที่ไม่อนุมัติ (พนักงานจะเห็นข้อความนี้):');
+      if (!remark || !remark.trim()) return;
+      // ยืนยันอีกชั้น — ปฏิเสธแล้วย้อนไม่ได้ และอีเมลเด้งหาพนักงานทันที
+      if (!confirm(`ไม่อนุมัติทั้ง ${items.length} รายการของ ${who}\nรวม ${Math.round(total).toLocaleString()} บาท\n\nเหตุผล: ${remark}\n\nยืนยัน? (ย้อนกลับไม่ได้)`)) return;
+      try {
+        await runBatch(items, r => managerApprove({ id: r.ID, decision: 'Rejected', remark, approverEmail: session.Email }), 'ปฏิเสธ');
+      } finally { load(); }
+    };
+
+    function closeModal() { document.getElementById('modal').classList.remove('show'); }
+    document.getElementById('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+    window.showDetail = showDetail; window.loadReceipt = loadReceipt; window.decide = decide; window.closeModal = closeModal;
+    window.clearInboxFilters = () => {
+      ['fStaff','fCat','fSearch'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      render();
+    };
+
+    if (session) load();
+  </script>
+</body>
+</html>

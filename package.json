@@ -1,0 +1,10 @@
+{
+  "name": "exion-expense-workspace",
+  "version": "8.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node tests/syntax.cjs && node tests/backend.cjs",
+    "test:browser": "node tests/browser.cjs"
+  },
+  "devDependencies": { "playwright": "1.63.0" }
+}

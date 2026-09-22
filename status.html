@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>คำขอของฉัน — EXION Expense</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#B7081D">
+  <link rel="stylesheet" href="css/experience.css">
+</head>
+<body>
+  <div class="header">
+    <button class="back" aria-label="ย้อนกลับ" onclick="location.href='index.html'" id="backBtn"></button>
+    <h1><img src="icons/logo.png" alt="EXION" class="logo"><span style="font-size:13px;font-weight:700;margin-left:6px;">คำขอของฉัน</span></h1>
+  </div>
+
+  <div class="container">
+    <div class="filter-toolbar"><input type="search" id="search" aria-label="ค้นหาคำขอ" placeholder="ค้นหาลูกค้า รายละเอียด หรือเลขคำขอ"><select id="filterStatus" aria-label="สถานะ"><option value="">ทุกสถานะ</option><option value="Pending">รออนุมัติ</option><option value="Approved">อนุมัติแล้ว</option><option value="Rejected">ไม่อนุมัติ</option></select></div>
+    <details class="card" style="padding:16px;margin-bottom:18px"><summary style="cursor:pointer;font-size:13px">ตัวกรองเพิ่มเติมและดาวน์โหลด Excel</summary><div class="form-grid" style="margin-top:18px"><div class="field"><label for="dateFrom">ตั้งแต่วันที่</label><input type="date" id="dateFrom"></div><div class="field"><label for="dateTo">ถึงวันที่</label><input type="date" id="dateTo"></div><div class="field"><label for="filterCat">ประเภท</label><select id="filterCat"><option value="">ทั้งหมด</option></select></div><div class="field" id="whoWrap" style="display:none"><label for="expWho">ผู้ใช้งานสำหรับส่งออก</label><select id="expWho"></select></div></div><div class="btn-row" id="exportCard"><button class="btn btn-secondary btn-sm" onclick="clearFilters()">ล้างตัวกรอง</button><button class="btn btn-secondary btn-sm" id="expBtn" onclick="doExportList()">ดาวน์โหลด Excel ตามตัวกรอง</button></div></details>
+
+    <div id="kpiZone"></div>
+    <div id="list" class="loading"><div class="spinner"></div></div>
+  </div>
+
+  <div id="editModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-head"><h3>✏️ แก้ไขคำขอ</h3><button class="modal-close" aria-label="ปิด" onclick="closeEdit()">✕</button></div>
+      <div id="editContent"></div>
+    </div>
+  </div>
+
+  <div id="detailModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-head"><h3 id="detailTitle">รายละเอียด</h3><button class="modal-close" aria-label="ปิด" onclick="closeDetail()">✕</button></div>
+      <div id="detailContent"></div>
+    </div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/icons.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/experience.js"></script>
+  <script>
+    const session = requireLogin();
+    let allReqs = [], categories = [], filteredReqs = [];
+
+    const CAT_TH = catMap(true);   // 🔴 รวมไว้ที่ js/app.js แล้ว ห้ามก๊อปตารางมาไว้ในหน้าอีก
+    // catLabel() อยู่ใน js/app.js แล้ว — ประกาศซ้ำจะพังทั้งหน้า
+
+    const bb = document.getElementById('backBtn');
+    if (bb && typeof icon === 'function') bb.innerHTML = icon('back');
+
+    /* ── 📥 โหลดรายการคำขอเป็น Excel ── */
+    async function loadExportPeople() {
+      try {
+        const list = await fetchExportableStaff(session.Email);
+        if (!Array.isArray(list) || list.length <= 1) return;   // ไม่มีลูกทีม = ไม่ต้องโชว์
+        const sel = document.getElementById('expWho');
+        sel.innerHTML = list.map(p => `<option value="${p.email}">${p.name}</option>`).join('');
+        document.getElementById('whoWrap').style.display = 'block';
+      } catch (e) { /* โหลดรายชื่อไม่ได้ก็ยังโหลดของตัวเองได้ */ }
+    }
+
+    window.doExportList = async function () {
+      const btn = document.getElementById('expBtn');
+      const who = (document.getElementById('expWho') || {}).value || session.Email;
+      btn.disabled = true; btn.textContent = '⏳ กำลังสร้างไฟล์...';
+      try {
+        const r = await exportRequestList({
+          requesterEmail: session.Email,
+          staffEmail: who,
+          dateFrom: document.getElementById('dateFrom').value,
+          dateTo:   document.getElementById('dateTo').value,
+          status:   document.getElementById('filterStatus').value
+        });
+        if (r.error) throw new Error(r.error);
+        if (!r.base64) throw new Error('ไม่มีข้อมูลไฟล์');
+        const bytes = atob(r.base64);
+        const arr = new Uint8Array(bytes.length);
+        for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+        const blob = new Blob([arr], { type: r.mimeType ||
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = r.filename || 'requests.xlsx';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        showToast('โหลดแล้ว · ' + r.count + ' รายการ', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      } finally {
+        btn.disabled = false; btn.textContent = '📥 โหลด Excel';
+      }
+    };
+
+    window.load = load;
+    async function load() {
+      try {
+        const [reqs, cats] = await Promise.all([fetchMyRequests(session.Email), fetchCategories()]);
+        allReqs = Array.isArray(reqs) ? reqs : [];
+        categories = Array.isArray(cats) ? cats : [];
+        const sel = document.getElementById('filterCat');
+        sel.innerHTML = '<option value="">ทั้งหมด</option>';
+        categories.forEach(c => { const o=document.createElement('option'); o.value=c.Code; o.textContent=catLabel(c.Code); sel.appendChild(o); });
+        applyFilters();
+        const linkedId=new URLSearchParams(location.search).get('id'); if(linkedId && !window.__openedLinkedRequest){window.__openedLinkedRequest=true;viewDetail(linkedId);}
+        loadExportPeople();
+      } catch (err) {
+        document.getElementById('list').classList.remove('loading');
+        document.getElementById('list').innerHTML = `<div class="empty"><div class="icon-wrap">⚠️</div>
+          <div class="title">โหลดไม่สำเร็จ</div><div class="sub">${esc(err.message)}</div>
+          <button class="btn btn-primary btn-sm" style="margin-top:14px;max-width:180px;" onclick="load()">🔄 ลองใหม่</button></div>`;
+      }
+    }
+
+    function applyFilters() {
+      const from = document.getElementById('dateFrom').value;
+      const to = document.getElementById('dateTo').value;
+      const cat = document.getElementById('filterCat').value;
+      const st = document.getElementById('filterStatus').value;
+      const q = document.getElementById('search').value.trim().toLowerCase();
+
+      filteredReqs = allReqs.filter(r => {
+        const d = r.ExpenseDate || r.Timestamp;
+        if (!d) return false;
+        const rd = new Date(d);
+        if (from && rd < new Date(from)) return false;
+        if (to) { const t = new Date(to); t.setHours(23,59,59,999); if (rd > t) return false; }
+        if (cat && r.Category !== cat) return false;
+        if (st && r.Status !== st) return false;
+        if (q) {
+          const hay = [r.ID, r.Customer, r.Venue, r.CustomerContact, r.Occasion, r.Destination].join(' ').toLowerCase();
+          if (hay.indexOf(q) < 0) return false;
+        }
+        return true;
+      }).sort((a,b) => new Date(b.ExpenseDate||b.Timestamp) - new Date(a.ExpenseDate||a.Timestamp));
+      renderList();
+    }
+    window.applyFilters = applyFilters;
+
+    function clearFilters() {
+      ['dateFrom','dateTo','filterCat','filterStatus','search'].forEach(id => document.getElementById(id).value = '');
+      applyFilters();
+    }
+    window.clearFilters = clearFilters;
+
+    document.getElementById('search').addEventListener('input', applyFilters);
+    // ทุกช่องกรองอัปเดตทันที ไม่ต้องกดปุ่มยืนยัน
+    ['filterCat','filterStatus','dateFrom','dateTo'].forEach(id =>
+      document.getElementById(id).addEventListener('change', applyFilters));
+
+    function renderList() {
+      const list = document.getElementById('list');
+      list.classList.remove('loading');
+      const kpi = document.getElementById('kpiZone');
+
+      if (!filteredReqs.length) {
+        kpi.innerHTML = '';
+        const hasFilter = ['dateFrom','dateTo','filterCat','filterStatus','search'].some(id => document.getElementById(id).value);
+        list.innerHTML = hasFilter
+          ? `<div class="empty"><div class="icon-wrap">🔍</div><div class="title">ไม่พบคำขอที่ตรงกับตัวกรอง</div>
+              <button class="btn btn-secondary btn-sm" style="margin-top:14px;max-width:200px;" onclick="clearFilters()">🗑 ล้างตัวกรอง</button></div>`
+          : `<div class="empty"><div class="icon-wrap">📭</div><div class="title">ยังไม่มีคำขอเบิก</div>
+              <div class="sub">เริ่มต้นด้วยการสร้างคำขอแรกของคุณ</div>
+              <a href="submit.html" class="btn btn-primary btn-sm" style="margin-top:14px;max-width:220px;text-decoration:none;">➕ ขอเบิกใหม่</a></div>`;
+        return;
+      }
+
+      const total = filteredReqs.reduce((s,r) => s + (Number(r.Amount)||0), 0);
+      const pending = filteredReqs.filter(r => r.Status === 'Pending').length;
+      const approved = filteredReqs.filter(r => r.Status === 'Approved').length;
+      const rejected = filteredReqs.filter(r => r.Status === 'Rejected').length;
+
+      kpi.innerHTML = `<div class="kpi-grid">
+        <div class="kpi"><div class="n">${filteredReqs.length}</div><div class="l">รายการ</div></div>
+        <div class="kpi warn"><div class="n">${pending}</div><div class="l">รออนุมัติ</div></div>
+        <div class="kpi ok"><div class="n">${approved}</div><div class="l">อนุมัติแล้ว</div></div>
+        <div class="kpi ${rejected?'bad':''}"><div class="n">${Math.round(total).toLocaleString()}</div><div class="l">THB รวม</div></div>
+      </div>`;
+
+      const byMonth = {};
+      filteredReqs.forEach(r => {
+        const d = new Date(r.ExpenseDate || r.Timestamp);
+        const key = isNaN(d) ? 'ไม่ระบุ' : d.toLocaleDateString('th-TH', {year:'numeric', month:'long'});
+        (byMonth[key] = byMonth[key] || []).push(r);
+      });
+
+      let html = '';
+      Object.entries(byMonth).forEach(([month, reqs]) => {
+        const sub = reqs.reduce((s,r) => s + (Number(r.Amount)||0), 0);
+        html += `<div class="sec-label" style="display:flex;justify-content:space-between;align-items:baseline;">
+          <span>${month}</span><span style="color:var(--accent);font-weight:800;">${Math.round(sub).toLocaleString()} ฿</span></div>`;
+        reqs.forEach(r => html += renderItem(r));
+      });
+      list.innerHTML = html;
+    }
+
+    function renderItem(r) {
+      const st = String(r.Status||'Pending');
+
+      // 📋 Pre-Approve เป็นคนละเรื่องกับรายการเบิก — ต้องไปกรอกยอดจริงที่หน้าส่งบิล
+      if (st === 'PreApprove' || st === 'Finalized') return renderPreApproveItem(r);
+
+      const cls = st === 'Approved' ? 'ok' : st === 'Rejected' ? 'bad' : 'warn';
+      const stTH = st === 'Approved' ? '✅ อนุมัติ' : st === 'Rejected' ? '❌ ไม่อนุมัติ' : '⏳ รออนุมัติ';
+      const d = r.ExpenseDate ? new Date(r.ExpenseDate) : null;
+      const date = d && !isNaN(d) ? d.toLocaleDateString('th-TH',{day:'numeric',month:'short'}) : '-';
+      const meta = [date, r.Venue, r.Customer].filter(Boolean).join(' • ');
+      return `<div class="req-card ${cls}">
+        <div class="ri-top">
+          <span class="ri-cat">${catLabel(r.Category)}</span>
+          <span class="pill ${cls}">${stTH}</span>
+          <span class="ri-amt">${Number(r.Amount||0).toLocaleString()} ฿</span>
+        </div>
+        <div class="ri-meta">${meta}</div>
+        ${cleanRemark(r.Remark) ? `<div class="ri-meta" style="color:var(--gray-400);">💬 ${cleanRemark(r.Remark)}</div>` : ''}
+        <div class="btn-row" style="margin-top:10px;gap:8px;">
+          <button class="btn btn-secondary btn-sm" style="flex:1.5;" onclick="viewDetail('${esc(r.ID)}')">👁 ดูรายละเอียด</button>
+          <button class="btn btn-secondary btn-sm" style="flex:1.1;color:#0891b2;border-color:#a5e5f0;" onclick="openEdit('${esc(r.ID)}')">✏️ แก้ไข</button>
+          <button class="btn btn-secondary btn-sm" style="flex:0 0 52px;padding-left:0;padding-right:0;color:#b91c1c;border-color:#fecaca;" onclick="deleteReq('${esc(r.ID)}')" title="ลบคำขอนี้" aria-label="ลบคำขอนี้">🗑</button>
+        </div>
+      </div>`;
+    }
+
+    function renderPreApproveItem(r) {
+      const ps = String(r.PreApproveStatus || 'Pending');
+      const done = String(r.Status || '') === 'Finalized';   // ส่งบิลจริงไปแล้ว
+      const ready = ps === 'Approved' && !done;
+      const cls = ready ? 'ok' : ps === 'Rejected' ? 'bad' : 'warn';
+      const badge = done ? '<span class="pill ok">✓ ส่งบิลแล้ว</span>'
+        : ready ? '<span class="pill ok">✅ อนุมัติงบแล้ว</span>'
+        : ps === 'Rejected' ? '<span class="pill bad">❌ ไม่อนุมัติงบ</span>'
+        : '<span class="pill warn">⏳ รออนุมัติงบ</span>';
+      const d = r.ExpenseDate ? new Date(r.ExpenseDate) : null;
+      const date = d && !isNaN(d) ? d.toLocaleDateString('th-TH',{day:'numeric',month:'short'}) : '-';
+      const meta = [date, r.Venue, r.Customer].filter(Boolean).join(' • ');
+      return `<div class="req-card ${cls}">
+        <div class="ri-top">
+          <span class="ri-cat">📋 ขอวงเงิน · ${catLabel(r.Category)}</span>
+          ${badge}
+          <span class="ri-amt">${Number(r.PreApproveBudget||0).toLocaleString()} ฿</span>
+        </div>
+        <div class="ri-meta">${meta}</div>
+        ${done
+          ? `<div class="ri-meta" style="margin-top:8px;color:var(--gray-400);">✓ ส่งบิลใช้จริงไปแล้ว — ดูบิลได้ในรายการด้านล่าง</div>`
+          : ready
+          ? `<div class="ok-box" style="margin:9px 0 0;font-size:12.5px;">📤 อนุมัติงบแล้ว — เหลือกรอกยอดจริงพร้อม<b>แนบใบเสร็จ</b></div>
+             <div class="btn-row" style="margin-top:9px;gap:8px;">
+               <a href="finalize-claim.html?id=${esc(r.ID)}" class="btn btn-primary btn-sm" style="flex:1;text-decoration:none;">📤 ส่งบิล + ยอดจริง</a>
+               <button class="btn btn-secondary btn-sm" style="flex:0 0 52px;padding-left:0;padding-right:0;color:#b91c1c;border-color:#fecaca;" onclick="cancelPre('${esc(r.ID)}')" title="ยกเลิกวงเงินนี้">🗑</button>
+             </div>`
+          : `<div class="btn-row" style="margin-top:10px;gap:8px;">
+               <a href="pre-approves.html" class="btn btn-secondary btn-sm" style="flex:1;text-decoration:none;">👁 ดูที่หน้า Pre-Approve</a>
+               <button class="btn btn-secondary btn-sm" style="flex:0 0 52px;padding-left:0;padding-right:0;color:#b91c1c;border-color:#fecaca;" onclick="cancelPre('${esc(r.ID)}')" title="ยกเลิกวงเงินนี้">🗑</button>
+             </div>`}
+      </div>`;
+    }
+
+    /*
+     * ยกเลิกวงเงินที่ขอไว้แต่ไม่ได้ใช้
+     * เดิมไม่มีปุ่มนี้ทั้งฝั่งพนักงานและหัวหน้า วงเงินเลยค้างในระบบตลอด
+     * แล้วระบบก็เตือนทุกสัปดาห์ว่า "ถ้าไม่ได้ใช้แล้วกรุณาแจ้งหัวหน้าเพื่อยกเลิก" ไม่รู้จบ
+     */
+    window.cancelPre = async (id) => {
+      const r = allReqs.find(x => x.ID === id);
+      const what = r ? `${catLabel(r.Category)} งบ ${Number(r.PreApproveBudget||0).toLocaleString()} ฿` : 'วงเงินนี้';
+      if (!confirm('ยกเลิก ' + what + ' ?\n\nยกเลิกแล้วกู้คืนไม่ได้ ถ้ายังต้องใช้ให้ขอใหม่')) return;
+      showLoading('กำลังยกเลิก...');
+      try {
+        const res = await apiPost('deleteRequest', { id, requesterEmail: session.Email });
+        hideLoading();
+        if (res.error) throw new Error(res.error);
+        showToast('ยกเลิกวงเงินแล้ว', 'success'); load();
+      } catch (err) { hideLoading(); showToast(err.message, 'error'); }
+    };
+
+    window.viewDetail = (id) => {
+      const r = allReqs.find(x => x.ID === id);
+      if (!r) return;
+      document.getElementById('detailTitle').textContent = catLabel(r.Category) + ' — ' + Number(r.Amount||0).toLocaleString() + ' ฿';
+      const rows = [
+        ['รหัส', r.ID], ['วันที่', toYMD(r.ExpenseDate) || '-'],
+        ['สถานะ', statusTH(r.Status)], ['สถานที่ / รายละเอียด', r.Venue || '-'],
+        ['ลูกค้า', r.Customer || '-'], ['ผู้ติดต่อ', r.CustomerContact || '-'],
+        ['ต้นทาง', r.Origin || '-'], ['ปลายทาง', r.Destination || '-'],
+        ['ระยะทาง', mileageOf(r) ? mileageOf(r) + ' กม.' : '-'],
+        ['โอกาส', r.Occasion || '-'], ['ผู้ร่วม', r.Attendees || '-'],
+        ['หมายเหตุ', cleanRemark(r.Remark) || '-'], ['ผู้อนุมัติ', r.ApprovedBy || '-']
+      ];
+      // แก้/ลบได้ทุกสถานะ — ระบบจะบล็อกเองถ้าเดือนนั้นปิดรอบ (ส่งบัญชีไปแล้ว)
+      const canDelete = true;
+      document.getElementById('detailContent').innerHTML =
+        requestTimeline(r) + `<div class="detail-list">` + rows.map(([k,v]) =>
+          `<div class="dl-row"><span class="k">${k}</span><span class="v">${esc(v)}</span></div>`).join('') + `</div>` +
+        `<button class="btn btn-danger" style="margin-top:16px;" onclick="deleteReq('${esc(r.ID)}')">🗑 ลบคำขอนี้</button>`;
+      document.getElementById('detailModal').classList.add('show');
+    };
+    window.closeDetail = () => document.getElementById('detailModal').classList.remove('show');
+
+    let editFiles = [];   // ใบเสร็จที่เพิ่งเลือกในรอบแก้ไขนี้
+
+    window.openEdit = (id) => {
+      const r = allReqs.find(x => x.ID === id);
+      if (!r) return;
+
+      // 📋 Pre-Approve ที่อนุมัติงบแล้ว → ไปหน้าส่งบิลใช้จริง (บังคับแนบใบเสร็จ)
+      if (r.Status === 'Finalized') {
+        return showToast('ใบนี้ส่งบิลไปแล้ว — ดูบิลจริงในรายการด้านล่าง', 'error');
+      }
+      if (r.Status === 'PreApprove' && r.PreApproveStatus === 'Approved') {
+        return location.href = 'finalize-claim.html?id=' + r.ID;
+      }
+      if (r.Status === 'PreApprove') {
+        return showToast('ยังรอหัวหน้าอนุมัติงบอยู่ — แก้ไขที่หน้า Pre-Approve', 'error');
+      }
+
+      editFiles = [];
+      const opts = categories.map(c => `<option value="${c.Code}" ${r.Category===c.Code?'selected':''}>${catLabel(c.Code)}</option>`).join('');
+      const isFuel = r.Category === 'FUEL';
+      let existing = [];
+      try { existing = JSON.parse(r.ReceiptURLs || '[]'); } catch { existing = []; }
+      if (!existing.length && r.ReceiptURL) existing = [r.ReceiptURL];
+
+      document.getElementById('editContent').innerHTML = `
+        <div class="warn-box">⚠️ ถ้าประเภทนี้ต้องอนุมัติ — หลังแก้ไขจะกลับเป็น <b>รออนุมัติ</b> ให้หัวหน้าอนุมัติใหม่<br>
+          <span style="font-weight:400;font-size:12px;">เดือนที่ส่งบัญชีไปแล้ว (Export อนุมัติ) จะแก้ไม่ได้ ระบบจะแจ้งเตือน</span></div>
+        <div class="field"><label>ประเภท</label><select id="e_cat">${opts}</select></div>
+        <div class="field"><label>วันที่</label><input type="date" id="e_date" value="${toYMD(r.ExpenseDate)}"></div>
+        <div class="field" id="e_kmField" style="display:${isFuel ? 'block' : 'none'};">
+          <label>ระยะทาง (กม.) <span class="required">*</span></label>
+          <input type="number" id="e_mileage" step="0.1" min="0" inputmode="decimal" value="${esc(r.Mileage_KM || '')}">
+          <div class="hint">⛽ ค่าน้ำมันคิดจาก ระยะทาง × เรท — แก้ระยะทางแล้วยอดจะคำนวณใหม่ให้เอง</div>
+        </div>
+        <div class="field" id="e_amtField" style="display:${isFuel ? 'none' : 'block'};">
+          <label>จำนวนเงิน (THB)</label>
+          <input type="number" id="e_amount" step="0.01" inputmode="decimal" value="${esc(r.Amount || '')}">
+        </div>
+        <div class="field"><label>สถานที่ / รายละเอียด</label><input type="text" id="e_venue" value="${esc(r.Venue || '')}"></div>
+        <div class="field"><label>ลูกค้า</label><input type="text" id="e_customer" value="${esc(r.Customer || '')}"></div>
+        <div class="field"><label>เลข Job <span class="optional-tag">ไม่บังคับ</span></label>
+          <input type="text" id="e_jobNo" value="${esc(r.JobNo || '')}" placeholder="เช่น J2026-0142"></div>
+        <div class="field"><label>ผู้ติดต่อ</label><input type="text" id="e_contact" value="${esc(r.CustomerContact || '')}"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div class="field"><label>ต้นทาง</label><input type="text" id="e_origin" value="${esc(r.Origin || '')}"></div>
+          <div class="field"><label>ปลายทาง</label><input type="text" id="e_dest" value="${esc(r.Destination || '')}"></div>
+        </div>
+        <div class="field">
+          <label>ใบเสร็จ <span class="optional-tag">${existing.length ? 'มีอยู่แล้ว ' + existing.length + ' ไฟล์' : 'ยังไม่มี'}</span></label>
+          <label for="e_files" class="upload-area">
+            <input type="file" id="e_files" accept="image/*,application/pdf" multiple>
+            <div class="icon-wrap">📎</div>
+            <div class="text">แตะเพื่อแนบใบเสร็จเพิ่ม</div>
+            <div class="sub">ภาพ/PDF · ไม่แนบก็ได้ ของเดิมจะอยู่เหมือนเดิม</div>
+          </label>
+          <div id="e_chips" style="margin-top:8px;"></div>
+          ${existing.length ? `<label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12.5px;color:var(--gray-400);cursor:pointer;">
+            <input type="checkbox" id="e_replace" style="width:auto;margin:0;"> ลบใบเสร็จเดิมทิ้ง แล้วใช้ไฟล์ใหม่แทน</label>` : ''}
+        </div>
+        <button class="btn btn-primary" onclick="saveEdit('${esc(r.ID)}')" style="margin-top:6px;">💾 บันทึกการแก้ไข</button>`;
+
+      document.getElementById('e_files').addEventListener('change', onEditFiles);
+      // เปลี่ยนประเภทเป็น/จาก FUEL แล้วต้องสลับช่องระยะทาง↔จำนวนเงิน
+      document.getElementById('e_cat').addEventListener('change', function (e) {
+        const fuel = e.target.value === 'FUEL';
+        document.getElementById('e_kmField').style.display  = fuel ? 'block' : 'none';
+        document.getElementById('e_amtField').style.display = fuel ? 'none' : 'block';
+      });
+      document.getElementById('editModal').classList.add('show');
+    };
+
+    async function onEditFiles(e) {
+      const files = Array.from(e.target.files || []);
+      if (!files.length) return;
+      if (editFiles.length + files.length > 10) return showToast('ไฟล์เกิน 10', 'error');
+      for (const f of files) {
+        if (f.size > 5 * 1024 * 1024) { showToast(f.name + ' ใหญ่เกิน 5 MB', 'error'); continue; }
+        editFiles.push({ name: f.name, base64: await fileToBase64(f) });
+      }
+      e.target.value = '';
+      renderEditChips();
+    }
+
+    function renderEditChips() {
+      const c = document.getElementById('e_chips');
+      if (!c) return;
+      c.innerHTML = editFiles.map((f,i) =>
+        `<span class="file-chip">📎 ${f.name.length>18?f.name.substr(0,15)+'...':f.name}<button type="button" onclick="removeEditFile(${i})">✕</button></span>`).join('');
+    }
+    window.removeEditFile = (i) => { editFiles.splice(i,1); renderEditChips(); };
+
+    window.closeEdit = () => { editFiles = []; document.getElementById('editModal').classList.remove('show'); };
+
+    window.saveEdit = async (id) => {
+      const catNow = document.getElementById('e_cat').value;
+      const kmEl = document.getElementById('e_mileage');
+      if (catNow === 'FUEL' && !(parseFloat(kmEl && kmEl.value) > 0)) {
+        return showToast('ใส่ระยะทางให้มากกว่า 0', 'error');
+      }
+      const updates = {
+        Category: catNow,
+        ExpenseDate: document.getElementById('e_date').value,
+        Mileage_KM: parseFloat(kmEl && kmEl.value) || 0,
+        Amount: parseFloat(document.getElementById('e_amount').value) || 0,
+        Venue: document.getElementById('e_venue').value,
+        Customer: document.getElementById('e_customer').value,
+        CustomerContact: document.getElementById('e_contact').value,
+        JobNo: (document.getElementById('e_jobNo') || {}).value || '',
+        Origin: document.getElementById('e_origin').value,
+        Destination: document.getElementById('e_dest').value
+      };
+      const repEl = document.getElementById('e_replace');
+      const replaceReceipts = !!(repEl && repEl.checked);
+      if (replaceReceipts && !editFiles.length) return showToast('เลือกไฟล์ใหม่ก่อน ถึงจะลบของเดิมได้', 'error');
+
+      showLoading(editFiles.length ? 'กำลังอัปโหลดใบเสร็จ...' : 'กำลังบันทึก...');
+      try {
+        const r = await apiPost('updateRequest', {
+          id, requesterEmail: session.Email, updates,
+          newReceipts: editFiles, replaceReceipts
+        });
+        hideLoading();
+        if (r.error) throw new Error(r.error);
+        showToast('แก้ไขสำเร็จ ✅', 'success');
+        closeEdit(); load();
+      } catch (err) { hideLoading(); showToast(err.message, 'error'); }
+    };
+
+    window.deleteReq = async (id) => {
+      const r = allReqs.find(x => x.ID === id);
+      const d = r && r.ExpenseDate ? new Date(r.ExpenseDate).toLocaleDateString('th-TH',{day:'numeric',month:'short'}) : '';
+      const what = r ? `${catLabel(r.Category)} ${Number(r.Amount||0).toLocaleString()} ฿ (${d})` : 'คำขอนี้';
+      if (!confirm('ลบ ' + what + ' ?\n\nลบแล้วกู้คืนไม่ได้')) return;
+      closeDetail();
+      showLoading('กำลังลบ...');
+      try {
+        const r = await apiPost('deleteRequest', { id, requesterEmail: session.Email });
+        hideLoading();
+        if (r.error) throw new Error(r.error);
+        showToast('ลบแล้ว', 'success'); load();
+      } catch (err) { hideLoading(); showToast(err.message, 'error'); }
+    };
+
+    const linkedStatus=new URLSearchParams(location.search).get('status'); if(linkedStatus)document.getElementById('filterStatus').value=linkedStatus;
+    if (session) { load(); renderBottomNav('status'); }
+  </script>
+</body>
+</html>

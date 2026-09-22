@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>ตรวจสอบ Export — EXION Expense</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#B7081D">
+  <link rel="stylesheet" href="css/experience.css">
+</head>
+<body>
+  <div class="header">
+    <button class="back" aria-label="ย้อนกลับ" onclick="location.href='index.html'" id="backBtn"></button>
+    <h1><img src="icons/logo.png" alt="EXION" class="logo"><span style="font-size:13px;font-weight:700;margin-left:6px;">ตรวจสอบ Export</span></h1>
+  </div>
+
+  <div class="container">
+    <div id="content" class="loading"><div class="spinner"></div></div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/icons.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/experience.js"></script>
+  <script>
+    const session = requireLogin();
+    const bb = document.getElementById('backBtn');
+    if (bb && typeof icon === 'function') bb.innerHTML = icon('back');
+
+    const exportId = new URLSearchParams(location.search).get('id');
+    let detail = null;
+    const MONTHS = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+    const CAT_TH = catMap(true);   // 🔴 รวมไว้ที่ js/app.js แล้ว ห้ามก๊อปตารางมาไว้ในหน้าอีก
+
+    async function load() {
+      if (!exportId) return fail('ไม่พบรหัสคำขอ');
+      try {
+        detail = await apiGet('getExportRequestDetail', { id: exportId, viewerEmail: session.Email });
+        if (detail.error) throw new Error(detail.error);
+        render();
+      } catch (err) { fail(err.message); }
+    }
+
+    function fail(msg) {
+      const c = document.getElementById('content');
+      c.classList.remove('loading');
+      c.innerHTML = `<div class="empty"><div class="icon-wrap">⚠️</div>
+        <div class="title">เปิดไม่ได้</div><div class="sub">${msg}</div>
+        <a href="index.html" class="btn btn-primary btn-sm" style="margin-top:16px;max-width:220px;text-decoration:none;">→ ไปหน้าแรก</a></div>`;
+    }
+
+    function render() {
+      const req = detail.request;
+      const me = String(session.Email).toLowerCase();
+
+      let stage = null;
+      if (req.ManagerStatus === 'Pending') stage = 'หัวหน้า';
+      else if (req.SeniorStatus === 'Pending') stage = 'Senior';
+      else if (req.GMStatus === 'Pending') stage = 'GM';
+
+      const canApprove =
+        (stage === 'หัวหน้า' && String(req.ManagerEmail||'').toLowerCase() === me) ||
+        (stage === 'Senior'  && String(req.SeniorEmail||'').toLowerCase()  === me) ||
+        (stage === 'GM'      && String(req.GMEmail||'').toLowerCase()      === me);
+
+      const stages = [
+        { name:'หัวหน้า', email:req.ManagerEmail, status:req.ManagerStatus, remark:req.ManagerRemark },
+        { name:'Senior',  email:req.SeniorEmail,  status:req.SeniorStatus,  remark:req.SeniorRemark },
+        { name:'GM',      email:req.GMEmail,      status:req.GMStatus,      remark:req.GMRemark }
+      ].filter(s => s.email);
+
+      const chain = `<div class="approver-chain">` + stages.map(s => {
+        const cls = s.status==='Approved'?'done':s.status==='Rejected'?'rejected':s.status==='Pending'?'current':'';
+        const ic  = s.status==='Approved'?'✅':s.status==='Rejected'?'❌':s.status==='Pending'?'⏳':'⏸';
+        return `<div class="approver-step ${cls}"><div class="as-ic">${ic}</div>
+          <div class="as-role">${s.name}</div><div class="as-who">${String(s.email).split('@')[0]}</div></div>`;
+      }).join('') + `</div>`;
+
+      const remarks = stages.filter(s => s.remark).map(s =>
+        `<div class="ri-meta">💬 <b>${s.name}:</b> ${s.remark}</div>`).join('');
+
+      // Category breakdown
+      const byCat = {};
+      detail.items.forEach(r => { byCat[r.Category] = (byCat[r.Category]||0) + (Number(r.Amount)||0); });
+      const maxCat = Math.max(1, ...Object.values(byCat));
+      const bars = Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([c,v]) =>
+        `<div class="bar-row"><span class="bl">${CAT_TH[c]||c}</span>
+          <span class="bt"><span class="bf" style="width:${(v/maxCat*100).toFixed(1)}%"></span></span>
+          <span class="bv">${Math.round(v).toLocaleString()}</span></div>`).join('');
+
+      const rows = detail.items.map((r,i) => {
+        const d = r.ExpenseDate ? new Date(r.ExpenseDate) : null;
+        const date = d && !isNaN(d) ? d.toLocaleDateString('th-TH',{day:'numeric',month:'short'}) : '-';
+        return `<tr>
+          <td>${i+1}</td><td>${date}</td><td>${CAT_TH[r.Category]||r.Category}</td>
+          <td>${esc(r.Customer || '-')}</td><td>${r.Venue || r.Occasion || '-'}</td>
+          <td class="num">${Number(r.Amount||0).toLocaleString()}</td></tr>`;
+      }).join('');
+
+      const badge = req.OverallStatus === 'Approved' ? '<span class="pill ok">✅ อนุมัติครบแล้ว</span>'
+        : req.OverallStatus === 'Rejected' ? '<span class="pill bad">❌ ถูกปฏิเสธ</span>'
+        : `<span class="pill warn">⏳ รอ ${stage || ''} อนุมัติ</span>`;
+
+      const c = document.getElementById('content');
+      c.classList.remove('loading');
+      c.innerHTML = `
+        <div class="count-hero">
+          <div class="lbl">${esc(req.StaffName)} · ${MONTHS[Number(req.Month)-1]} ${esc(req.Year)}</div>
+          <div class="num">${Number(req.TotalAmount||0).toLocaleString()}</div>
+          <div class="sub">THB • ${esc(req.ItemCount)} รายการ</div>
+          ${req.PeriodStart && req.PeriodEnd
+            ? `<div class="sub" style="opacity:.85;">📅 ${fmtTH(req.PeriodStart)} – ${fmtTH(req.PeriodEnd)}</div>` : ''}
+        </div>
+
+        <div class="card">
+          <div style="text-align:center;margin-bottom:4px;">${badge}</div>
+          ${chain}
+          ${remarks}
+        </div>
+
+        ${bars ? `<div class="card"><div class="sec-label" style="margin:0 0 10px;">แยกตามประเภท</div>${bars}</div>` : ''}
+
+        <div class="card">
+          <div class="sec-label" style="margin:0 0 10px;">รายการทั้งหมด (${detail.items.length})</div>
+          <div class="xl-wrap">
+            <table class="xl">
+              <thead><tr><th>#</th><th>วันที่</th><th>ประเภท</th><th>ลูกค้า</th><th>รายละเอียด</th><th class="num">THB</th></tr></thead>
+              <tbody>${rows}</tbody>
+              <tfoot><tr><td colspan="5">รวมทั้งสิ้น</td><td class="num">${Number(req.TotalAmount||0).toLocaleString()}</td></tr></tfoot>
+            </table>
+          </div>
+          <button class="btn btn-secondary" onclick="downloadDraft()" style="margin-top:12px;">👀 ดาวน์โหลดตัวอย่าง (มีลายน้ำ)</button>
+        </div>
+
+        ${canApprove ? `
+        <div class="card decide-card">
+          <div class="card-head"><span class="ib ib-red">✅</span>
+            <div><div class="ch-title">คุณคือ ${stage}</div><div class="ch-sub">กรุณาตรวจสอบและตัดสินใจ</div></div>
+          </div>
+          <div class="field" style="margin-top:12px;">
+            <label>ช่วงรอบ <span class="optional-tag">ปรับได้</span></label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <input type="date" id="periodStartInput"
+                value="${toYMD(req.PeriodStart)}"
+                max="${todayYMD()}">
+              <input type="date" id="periodEndInput"
+                value="${toYMD(req.PeriodEnd)}"
+                max="${todayYMD()}">
+            </div>
+            <div class="hint">
+              ${req.PeriodStart
+                ? `พนักงานส่งมาเป็น <b>${fmtTH(req.PeriodStart)} – ${fmtTH(req.PeriodEnd)}</b>`
+                : 'รอบเก่าที่ยังไม่ได้บันทึกช่วงวัน — เลือกได้เลย'}
+              <br>เปลี่ยนแล้วระบบคิดยอดใหม่ให้ทันที ไม่ต้องตีกลับให้พนักงานส่งใหม่
+            </div>
+            <div id="periodWarn" style="margin-top:8px;"></div>
+          </div>
+          <div class="field">
+            <label>หมายเหตุ (บังคับถ้าไม่อนุมัติ)</label>
+            <textarea id="remarkInput" rows="2" placeholder="ระบุเหตุผล..."></textarea>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-danger" style="flex:1;" onclick="decide('Rejected')">❌ ไม่อนุมัติ</button>
+            <button class="btn btn-primary" style="flex:1.4;" onclick="decide('Approved')">✅ อนุมัติ</button>
+          </div>
+          <p class="footnote" style="margin-top:10px;">💡 ระบบใช้ลายเซ็นที่บันทึกไว้ในโปรไฟล์อัตโนมัติ</p>
+        </div>` : (req.OverallStatus === 'Pending'
+          ? `<div class="info-box">⏳ รอ ${stage} อนุมัติ — คุณยังไม่ต้องดำเนินการ</div>` : '')}
+      `;
+      if (canApprove) bindPeriodWatch();
+    }
+
+    function fmtTH(v) {
+      const d = new Date(v);
+      return isNaN(d) ? '-' : d.toLocaleDateString('th-TH', { day:'numeric', month:'long', year:'numeric' });
+    }
+
+    // เตือนสดๆ ถ้าช่วงที่เลือกทับรอบก่อนหรือมีวันหาย — ถามจาก server เพราะรู้ประวัติรอบทั้งหมด
+    let warnTimer = null;
+    function bindPeriodWatch() {
+      const s = document.getElementById('periodStartInput');
+      const e = document.getElementById('periodEndInput');
+      if (!s || !e) return;
+      const run = () => {
+        clearTimeout(warnTimer);
+        warnTimer = setTimeout(async () => {
+          const box = document.getElementById('periodWarn');
+          if (!box || !s.value || !e.value) return;
+          if (new Date(e.value) < new Date(s.value)) {
+            box.innerHTML = `<div class="bad-box" style="margin:0;font-size:12.5px;">❌ วันจบอยู่ก่อนวันเริ่ม</div>`;
+            return;
+          }
+          try {
+            const p = await apiGet('previewPeriod', {
+              email: detail.request.StaffEmail, start: s.value, end: e.value, exportId: exportId });
+            if (!p || p.error) return;
+            box.innerHTML =
+              (p.warnings || []).map(x => `<div class="warn-box" style="margin:0 0 6px;font-size:12.5px;">${x}</div>`).join('') +
+              `<div class="info-box" style="margin:0;font-size:12.5px;">📊 ช่วงนี้มี <b>${p.count}</b> รายการ · <b>${Number(p.total).toLocaleString()}</b> บาท</div>`;
+          } catch {}
+        }, 350);
+      };
+      s.addEventListener('input', run);
+      e.addEventListener('input', run);
+      run();
+    }
+
+    window.decide = async (decision) => {
+      const el = document.getElementById('remarkInput');
+      const remark = el ? el.value.trim() : '';
+      if (decision === 'Rejected' && !remark) return showToast('กรุณาระบุเหตุผล', 'error');
+
+      const ps = document.getElementById('periodStartInput');
+      const pe = document.getElementById('periodEndInput');
+      const periodStart = (decision === 'Approved' && ps) ? ps.value : '';
+      const periodEnd   = (decision === 'Approved' && pe) ? pe.value : '';
+      if (decision === 'Approved' && periodStart && periodEnd && new Date(periodEnd) < new Date(periodStart)) {
+        return showToast('วันจบอยู่ก่อนวันเริ่ม', 'error');
+      }
+
+      const origS = toYMD(detail.request.PeriodStart);
+      const origE = toYMD(detail.request.PeriodEnd);
+      const moved = decision === 'Approved' && ((periodStart && periodStart !== origS) || (periodEnd && periodEnd !== origE));
+
+      let msg;
+      if (decision !== 'Approved') msg = 'ไม่อนุมัติ Export นี้?';
+      else if (moved) {
+        const warnTxt = (document.getElementById('periodWarn') || {}).textContent || '';
+        msg = `เปลี่ยนช่วงรอบเป็น\n${fmtTH(periodStart)} – ${fmtTH(periodEnd)}\n\n` +
+              (/⚠️/.test(warnTxt) ? warnTxt.trim() + '\n\n' : '') +
+              'ระบบจะคิดยอดใหม่ตามช่วงนี้ แล้วอนุมัติเลย\nยืนยัน?';
+      } else msg = 'อนุมัติ Export นี้?';
+      if (!confirm(msg)) return;
+
+      showLoading(moved ? 'กำลังคิดยอดใหม่...' : 'กำลังบันทึก...');
+      try {
+        const r = await apiPost('approveExportRequest', {
+          id: exportId, decision, approverEmail: session.Email, remark, periodStart, periodEnd });
+        hideLoading();
+        if (r.error) throw new Error(r.error);
+        showToast(decision === 'Approved' ? 'อนุมัติเรียบร้อย ✅' : 'บันทึกแล้ว', 'success');
+        setTimeout(() => location.reload(), 1000);
+      } catch (err) { hideLoading(); showToast(err.message, 'error'); }
+    };
+
+    window.downloadDraft = async () => {
+      const req = detail.request;
+      showLoading('กำลังสร้างตัวอย่าง...');
+      try {
+        // ส่งช่วงวันที่กำลังปรับอยู่บนหน้าจอไปด้วย ไม่งั้นตัวอย่างไม่ตรงกับที่จะอนุมัติ
+        const ps = document.getElementById('periodStartInput');
+        const pe = document.getElementById('periodEndInput');
+        const r = await apiPost('downloadDraftExport', {
+          staffEmail: req.StaffEmail, year: req.Year, month: req.Month,
+          periodStart: ps ? ps.value : toYMD(req.PeriodStart),
+          periodEnd:   pe ? pe.value : toYMD(req.PeriodEnd),
+          requesterEmail: session.Email });
+        hideLoading();
+        if (r.error) throw new Error(r.error);
+        const bytes = atob(r.base64);
+        const arr = new Uint8Array(bytes.length);
+        for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+        const blob = new Blob([arr], { type: r.mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = r.filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        showToast('ดาวน์โหลดตัวอย่างแล้ว ✅', 'success');
+      } catch (err) { hideLoading(); showToast(err.message, 'error'); }
+    };
+
+    if (session) { load(); renderBottomNav('inbox'); }
+  </script>
+</body>
+</html>

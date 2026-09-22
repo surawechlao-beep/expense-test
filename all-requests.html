@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>All Requests — EXION</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#B7081D">
+  <style>
+    .flt-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .flt-grid .field { margin:0; }
+    .flt-grid label { font-size:11px; }
+    .flt-grid select, .flt-grid input { padding:9px 11px; font-size:13px; }
+    .search-box { position:relative; margin-top:9px; }
+    .search-box input { padding-left:38px; }
+    .search-box::before { content:'🔍'; position:absolute; left:13px; top:50%; transform:translateY(-50%); font-size:14px; opacity:.5; }
+  </style>
+  <link rel="stylesheet" href="css/experience.css">
+</head>
+<body>
+  <div class="header">
+    <button class="back" aria-label="ย้อนกลับ" onclick="location.href='index.html'" id="backBtn"></button>
+    <h1><img src="icons/logo.png" alt="EXION" class="logo"><span style="font-size:13px;font-weight:700;margin-left:6px;">All Requests</span></h1>
+  </div>
+
+  <div class="container">
+    <!-- v6.0 ปิดลูป: รายการที่อนุมัติแล้วรอบัญชีโอนเงิน -->
+    <div id="unpaidZone"></div>
+
+    <!-- Filters -->
+    <div class="card">
+      <div class="sec-label" style="margin:0 0 10px;">🔎 กรองรายการ</div>
+      <div class="flt-grid">
+        <div class="field"><label>สถานะ</label>
+          <select id="fStatus"><option value="">ทั้งหมด</option><option value="Pending">รออนุมัติ</option><option value="Approved">อนุมัติแล้ว</option><option value="Rejected">ไม่อนุมัติ</option></select>
+        </div>
+        <div class="field"><label>แผนก</label><select id="fDept"><option value="">ทั้งหมด</option></select></div>
+        <div class="field"><label>พนักงาน</label><select id="fStaff"><option value="">ทั้งหมด</option></select></div>
+        <div class="field"><label>ประเภท</label><select id="fCategory"><option value="">ทั้งหมด</option></select></div>
+        <div class="field"><label>ปี</label><select id="fYear"><option value="">ทั้งหมด</option></select></div>
+        <div class="field"><label>เดือน</label>
+          <select id="fMonth"><option value="">ทั้งหมด</option>
+            <option value="01">ม.ค.</option><option value="02">ก.พ.</option><option value="03">มี.ค.</option>
+            <option value="04">เม.ย.</option><option value="05">พ.ค.</option><option value="06">มิ.ย.</option>
+            <option value="07">ก.ค.</option><option value="08">ส.ค.</option><option value="09">ก.ย.</option>
+            <option value="10">ต.ค.</option><option value="11">พ.ย.</option><option value="12">ธ.ค.</option>
+          </select>
+        </div>
+      </div>
+      <div class="search-box"><input type="text" id="fSearch" placeholder="ค้นหา ชื่อ / สถานที่ / ID..."></div>
+      <button class="btn btn-secondary btn-sm" id="clearBtn" style="width:100%;margin-top:9px;">🗑 ล้างตัวกรอง</button>
+    </div>
+
+    <div id="statsZone"></div>
+    <div id="list" class="loading"><div class="spinner"></div></div>
+  </div>
+
+  <div id="modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-head"><h3 id="modalTitle">รายละเอียด</h3><button class="modal-close" aria-label="ปิด" onclick="closeModal()">✕</button></div>
+      <div id="modalContent"></div>
+    </div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/icons.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/experience.js"></script>
+  <script>
+    const session = requireLogin();
+    let allRequests = [];
+
+    const CAT_TH = catMap();   // 🔴 รวมไว้ที่ js/app.js แล้ว ห้ามก๊อปตารางมาไว้ในหน้าอีก
+    const CAT_IC = CAT_ICON_TH;
+
+    const bb = document.getElementById('backBtn');
+    if (bb && typeof icon === 'function') bb.innerHTML = icon('back');
+
+    async function load() {
+      loadUnpaid();
+      try {
+        const result = await fetchAllRequests(session.Email);
+        if (result && result.error) throw new Error(result.error);
+        allRequests = Array.isArray(result) ? result : [];
+        populateFilters();
+        applyFilters();
+        renderBottomNav('home');
+      } catch (err) {
+        renderError('list', err.message, load);
+        renderBottomNav('home');
+      }
+      ['fStatus','fDept','fStaff','fCategory','fYear','fMonth'].forEach(id => document.getElementById(id).addEventListener('change', applyFilters));
+      document.getElementById('fSearch').addEventListener('input', applyFilters);
+      document.getElementById('clearBtn').addEventListener('click', clearFilters);
+    }
+
+    function populateFilters() {
+      const depts=new Set(), staffs=new Set(), cats=new Set(), years=new Set();
+      allRequests.forEach(r => {
+        if (r.Department) depts.add(r.Department);
+        if (r.StaffName) staffs.add(r.StaffName);
+        if (r.Category) cats.add(r.Category);
+        const d = new Date(r.ExpenseDate || r.Timestamp);
+        if (!isNaN(d)) years.add(String(d.getFullYear()));
+      });
+      fill('fDept', [...depts].sort());
+      fill('fStaff', [...staffs].sort());
+      fill('fCategory', [...cats].sort(), CAT_TH);
+      fill('fYear', [...years].sort().reverse());
+    }
+
+    function fill(id, items, labelMap) {
+      const sel = document.getElementById(id);
+      const first = sel.options[0];
+      sel.innerHTML = ''; sel.appendChild(first);
+      items.forEach(v => { const o=document.createElement('option'); o.value=v; o.textContent=(labelMap&&labelMap[v])||v; sel.appendChild(o); });
+    }
+
+    function clearFilters() {
+      ['fStatus','fDept','fStaff','fCategory','fYear','fMonth','fSearch'].forEach(id => document.getElementById(id).value = '');
+      applyFilters();
+    }
+
+    function applyFilters() {
+      const g = id => document.getElementById(id).value;
+      const status=g('fStatus'), dept=g('fDept'), staff=g('fStaff'), cat=g('fCategory'), year=g('fYear'), month=g('fMonth');
+      const search = g('fSearch').trim().toLowerCase();
+
+      const filtered = allRequests.filter(r => {
+        if (status && r.Status !== status) return false;
+        if (dept && r.Department !== dept) return false;
+        if (staff && r.StaffName !== staff) return false;
+        if (cat && r.Category !== cat) return false;
+        const d = new Date(r.ExpenseDate || r.Timestamp);
+        if (year && (isNaN(d) || String(d.getFullYear()) !== year)) return false;
+        if (month && (isNaN(d) || String(d.getMonth()+1).padStart(2,'0') !== month)) return false;
+        if (search) {
+          const blob = `${esc(r.StaffName)} ${esc(r.Venue)} ${esc(r.ID)} ${esc(r.Occasion)} ${esc(r.Customer)}`.toLowerCase();
+          if (!blob.includes(search)) return false;
+        }
+        return true;
+      });
+      renderStats(filtered);
+      renderList(filtered);
+    }
+
+    function renderStats(items) {
+      const p = items.filter(r => r.Status==='Pending').length;
+      const a = items.filter(r => r.Status==='Approved').length;
+      const rj = items.filter(r => r.Status==='Rejected').length;
+      /*
+         🔴 ตัดใบ "ขอวงเงิน" ออกจากยอดรวม
+            finalizeClaim เขียนยอดรวมบิลจริงกลับลงแถว Pre-Approve ด้วย
+            ถ้าไม่ตัด ยอดรวมจะนับซ้ำสองเท่าของค่ารับรองทุกใบ
+      */
+      const money = items.filter(r => r.Status !== 'PreApprove' && r.Status !== 'Finalized');
+      const total = money.reduce((s,r) => s+(Number(r.Amount)||0), 0);
+      document.getElementById('statsZone').innerHTML = `
+        <div class="kpi-grid">
+          <div class="kpi red"><div class="label">💰 รวม</div><div class="value">${Math.round(total).toLocaleString()}</div><div class="delta">THB • ${money.length} รายการ</div></div>
+          <div class="kpi green"><div class="label">✅ อนุมัติแล้ว</div><div class="value">${a}</div><div class="delta">รายการ</div></div>
+          <div class="kpi orange"><div class="label">⏳ รออนุมัติ</div><div class="value">${p}</div><div class="delta">รายการ</div></div>
+          <div class="kpi blue" style="background:linear-gradient(135deg,#64748B,#475569);"><div class="label">❌ ไม่อนุมัติ</div><div class="value">${rj}</div><div class="delta">รายการ</div></div>
+        </div>`;
+    }
+
+    function renderList(items) {
+      const list = document.getElementById('list');
+      list.classList.remove('loading');
+      if (items.length === 0) {
+        list.innerHTML = `<div class="empty"><div class="icon-wrap">🔍</div><div class="title">ไม่พบรายการ</div><div class="sub">ลองปรับตัวกรอง</div></div>`;
+        return;
+      }
+      const byMonth = {};
+      items.forEach(r => {
+        const d = new Date(r.ExpenseDate || r.Timestamp);
+        const key = isNaN(d) ? 'ไม่ระบุ' : d.toLocaleDateString('th-TH', {year:'numeric', month:'long'});
+        (byMonth[key] = byMonth[key] || []).push(r);
+      });
+
+      let html = '';
+      Object.entries(byMonth).forEach(([month, reqs]) => {
+        const sub = reqs.reduce((s,r)=>s+(Number(r.Amount)||0),0);
+        html += `<div class="sec-label">${month} · ${reqs.length} รายการ · ${Math.round(sub).toLocaleString()} ฿</div>`;
+        reqs.forEach(r => {
+          const idx = allRequests.indexOf(r);
+          const bg = r.Status==='Pending' ? '#FEF3C7' : r.Status==='Approved' ? '#DCFCE7' : '#FEE2E2';
+          const fg = r.Status==='Pending' ? '#92400E' : r.Status==='Approved' ? '#065F46' : '#991B1B';
+          const badgeCls = 'badge-' + String(r.Status||'').toLowerCase();
+          html += `<div class="request-item" onclick="showDetail(${idx})">
+            <div class="cat-icon" style="background:${bg};color:${fg};">${CAT_IC[r.Category]||'📦'}</div>
+            <div class="info">
+              <div class="title">${esc(r.StaffName)} · ${CAT_TH[r.Category]||r.Category}</div>
+              <div class="meta">${formatDate(r.ExpenseDate || r.Timestamp)}${r.Venue ? ' • ' + r.Venue : ''}</div>
+            </div>
+            <div class="right">
+              <div class="amount">${Math.round(Number(r.Amount)||0).toLocaleString()}</div>
+              <span class="badge-pill ${badgeCls}" style="font-size:11px;">${esc(r.Status||'-')}</span>
+            </div>
+          </div>`;
+        });
+      });
+      list.innerHTML = html;
+    }
+
+    function showDetail(idx) {
+      const r = allRequests[idx];
+      document.getElementById('modalTitle').textContent = r.StaffName + ' — ' + (CAT_TH[r.Category]||r.Category);
+      const badgeCls = 'badge-' + String(r.Status||'').toLowerCase();
+      const rows = [
+        ['ID', r.ID], ['พนักงาน', r.StaffName + ' (' + r.Department + ')'], ['Email', r.StaffEmail],
+        ['ประเภท', CAT_TH[r.Category]||r.Category], ['วันที่', formatDate(r.ExpenseDate)],
+        ['สถานที่', r.Venue || '-'], ['โอกาส', r.Occasion || '-'], ['ผู้ร่วม', r.Attendees || '-']
+      ];
+      if (r.Customer) rows.push(['ลูกค้า', r.Customer]);
+      if (r.Mileage_KM) rows.push(['ระยะทาง', r.Mileage_KM + ' กม.']);
+      if (r.ApprovedBy) rows.push(['ผู้อนุมัติ', r.ApprovedBy]);
+      if (r.ApprovedAt) rows.push(['อนุมัติเมื่อ', formatDate(r.ApprovedAt)]);
+      if (r.Remark) rows.push(['หมายเหตุ', String(r.Remark).split(' sig:')[0]]);
+
+      let html = `<div class="detail-row"><div class="key">จำนวนเงิน</div><div class="val big">${Math.round(Number(r.Amount)||0).toLocaleString()} <span style="font-size:13px;color:var(--gray-500);font-weight:600;">THB</span></div></div>
+        <div class="detail-row"><div class="key">สถานะ</div><div class="val"><span class="badge-pill ${badgeCls}">${esc(r.Status)}</span></div></div>`
+        + rows.map(([k,v]) => `<div class="detail-row"><div class="key">${k}</div><div class="val">${v}</div></div>`).join('');
+
+      let urls = [];
+      try { urls = JSON.parse(r.ReceiptURLs || '[]'); } catch {}
+      if (urls.length === 0 && r.ReceiptURL) urls = [r.ReceiptURL];
+      if (urls.length > 0) {
+        html += `<div style="margin-top:16px;"><div style="font-size:13px;font-weight:700;margin-bottom:8px;">📎 ใบเสร็จ (${urls.length})</div><div style="display:flex;flex-wrap:wrap;gap:6px;">`;
+        for (let i=0;i<urls.length;i++) html += `<button class="btn btn-secondary btn-sm" onclick="loadReceipt('${esc(r.ID)}',${i})">🔒 ไฟล์ ${i+1}</button>`;
+        html += `</div><img id="rcptImg" class="preview-img" alt="ใบเสร็จ" style="display:none;"></div>`;
+      }
+      document.getElementById('modalContent').innerHTML = html;
+      document.getElementById('modal').classList.add('show');
+    }
+
+    /**
+     * v6.0 — ปิดลูปการจ่ายเงิน
+     * เดิมระบบจบที่ "Export อนุมัติ" แล้วเงียบ พนักงานไม่รู้ว่าเงินเข้าเมื่อไหร่
+     * ตรงนี้ให้บัญชี/GM กดยืนยันว่าโอนแล้ว → พนักงานได้แจ้งเตือนทันที
+     */
+    // เฉพาะฝ่ายบัญชีกับ GM เท่านั้นที่กดยืนยันการโอนได้ (คนเดียวเป็นได้ทั้งบัญชีและผู้บริหาร)
+    let canMarkPaid = false;
+    async function loadUnpaid() {
+      try {
+        const role = await fetchMyRole(session.Email);
+        canMarkPaid = !!(role && (role.isAccountant || role.isGM));
+      } catch (e) { canMarkPaid = false; }
+      let list = [];
+      try {
+        const r = await apiGet('getUnpaidExports', { email: session.Email });
+        list = Array.isArray(r) ? r : [];
+      } catch (e) { return; }
+      const zone = document.getElementById('unpaidZone');
+      if (!list.length) { zone.innerHTML = ''; return; }
+
+      const total = list.reduce((s,x) => s + (Number(x.TotalAmount)||0), 0);
+      zone.innerHTML = `<div class="card">
+        <div class="card-head"><span class="ib ib-green">💵</span>
+          <div><div class="ch-title">รอโอนเงิน (${list.length})</div>
+          <div class="ch-sub">อนุมัติแล้ว รวม ${Math.round(total).toLocaleString()} บาท</div></div>
+        </div>
+        <div style="margin-top:12px;">
+        ${list.map(x => {
+          const days = Math.floor((Date.now() - new Date(x.RequestedAt).getTime()) / 86400000);
+          return `<div class="req-card ${days >= 7 ? 'warn' : 'ok'}">
+            <div class="ri-top">
+              <span class="ri-cat">${x.StaffName}</span>
+              ${days >= 7 ? `<span class="pill warn">รอ ${days} วัน</span>` : ''}
+              <span class="ri-amt">${Number(x.TotalAmount||0).toLocaleString()} ฿</span>
+            </div>
+            <div class="ri-meta">ใบเบิกเดือน ${x.Month}/${x.Year} · ${x.ItemCount} รายการ</div>
+            ${canMarkPaid ? `<button class="btn btn-primary btn-sm" style="margin-top:9px;"
+                    onclick="markPaid('${x.ID}','${String(x.StaffName).replace(/'/g,'')}',${Number(x.TotalAmount)||0})">
+              💵 ยืนยันว่าโอนแล้ว</button>` : ''}
+          </div>`;
+        }).join('')}
+        </div>
+      </div>`;
+    }
+
+    window.markPaid = async (exportId, name, amount) => {
+      if (!confirm('ยืนยันว่าโอนเงินให้ ' + name + ' แล้ว?\n\nจำนวน ' + Math.round(amount).toLocaleString() + ' บาท\nระบบจะแจ้งเตือนพนักงานทันที')) return;
+      showLoading('กำลังบันทึก...');
+      try {
+        const r = await markExportPaid(session.Email, exportId);
+        hideLoading();
+        if (r.error) throw new Error(r.error);
+        showToast('บันทึกแล้ว — แจ้ง ' + name + ' เรียบร้อย ✅', 'success');
+        loadUnpaid();
+      } catch (err) { hideLoading(); showToast(err.message, 'error'); }
+    };
+
+    async function loadReceipt(id, fileIndex) {
+      showLoading('โหลดใบเสร็จ...');
+      try {
+        const r = await fetchReceiptImage(id, session.Email, fileIndex);
+        hideLoading();
+        if (r.error) throw new Error(r.error);
+        const img = document.getElementById('rcptImg');
+        img.src = r.dataUrl; img.style.display = 'block';
+        img.onclick = () => openImageViewer(r.dataUrl, 'แตะ 2 ครั้งเพื่อซูม');
+      } catch (err) { hideLoading(); showToast(err.message, 'error'); }
+    }
+
+    function closeModal() { document.getElementById('modal').classList.remove('show'); }
+    document.getElementById('modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+    window.showDetail = showDetail; window.loadReceipt = loadReceipt; window.closeModal = closeModal;
+    if (session) load();
+  </script>
+</body>
+</html>
