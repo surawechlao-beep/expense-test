@@ -4,7 +4,7 @@
  */
 const CONFIG = {
   // Apps Script Web App URL
-  API_URL: 'https://script.google.com/macros/s/AKfycbyGSypTUw72UuTlHR2TrXUJum82nvH0gQ_KBIV_Oy-qBH-aR0Rf21I5ys_WUjiOIVk7hg/exec',
+  API_URL: 'https://script.google.com/macros/s/AKfycbweiUphd2aO4ESBgFMQF7AreHy-s0eEoYouBvtXxFHQRBlEhaywtLfVT66BKT_aC71w/exec',
 
 
   COMPANY_NAME: 'Exionth Co., Ltd.',
