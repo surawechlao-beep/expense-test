@@ -506,7 +506,7 @@
         const r = await adminResetPassword(session.Email, email);
         hideLoading();
         if (r.error) throw new Error(r.error);
-        await confirmDialog('รหัสตั้งบัญชีของ '+name, 'ส่งรหัสนี้ให้พนักงานผ่านช่องทางที่ตรวจสอบตัวตนแล้ว\n\n'+r.setupCode+'\n\nใช้ได้ครั้งเดียว ภายใน 24 ชั่วโมง', 'รับทราบ');
+        await confirmDialog('รหัสกู้บัญชีของ '+name, 'ส่งรหัสนี้ให้พนักงานผ่านช่องทางที่ตรวจสอบตัวตนแล้ว\n\n'+r.setupCode+'\n\nใช้ได้ครั้งเดียว ภายใน 24 ชั่วโมง\nเปิดหน้าลืมรหัสผ่าน แล้วเลือก มีรหัสกู้บัญชีแล้ว', 'รับทราบ');
       } catch (err) { hideLoading(); showToast(err.message, 'error'); }
     };
 

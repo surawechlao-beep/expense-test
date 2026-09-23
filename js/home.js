@@ -1,10 +1,53 @@
 (() => {
  let setup=false;
+ const recovery=new URLSearchParams(location.search).get('mode')==='recovery';
  const form=document.getElementById('loginForm'),error=document.getElementById('authError');
- document.getElementById('toggleSetup').onclick=()=>{setup=!setup;document.getElementById('setupFields').hidden=!setup;document.getElementById('setupCode').required=setup;document.getElementById('confirmPassword').required=setup;document.getElementById('authTitle').textContent=setup?'ตั้งรหัสผ่านของคุณ':'เข้าสู่พื้นที่ทำงาน';document.getElementById('authHelp').textContent=setup?'ใช้รหัสตั้งบัญชีที่ผู้ดูแลส่งให้ · รหัสผ่านอย่างน้อย 8 ตัวอักษรและมีตัวเลข':'ใช้อีเมลบริษัทและรหัสผ่านของคุณ';document.getElementById('loginBtn').textContent=setup?'ตั้งรหัสผ่านและเข้าสู่ระบบ':'เข้าสู่ระบบ →';document.getElementById('toggleSetup').textContent=setup?'กลับไปเข้าสู่ระบบ':'ใช้งานครั้งแรก / ตั้งรหัสใหม่';error.textContent='';};
- form.onsubmit=async e=>{e.preventDefault();const btn=document.getElementById('loginBtn');btn.disabled=true;error.textContent='';try{const email=form.email.value.trim().toLowerCase(),password=form.password.value;if(setup)await apiPost('setPassword',{email,password,confirmPassword:document.getElementById('confirmPassword').value,setupCode:document.getElementById('setupCode').value.trim()});const s=await loginWithPassword(email,password);if(!s.token)throw new Error('Backend ยังไม่ได้อัปเดตเป็น Workspace 8 กรุณาติดต่อผู้ดูแล');setSession(s);const next=sessionStorage.getItem('exion_return_to');sessionStorage.removeItem('exion_return_to');if(next&&/^[a-z0-9-]+\.html(?:[?#].*)?$/i.test(next)&&!next.startsWith('index.html')){location.href=next;return;}await showHome();}catch(e){error.textContent=e.message;}finally{btn.disabled=false;}};
- async function showHome(){document.getElementById('loginView').hidden=true;document.getElementById('workspace').hidden=false;const el=document.getElementById('homeContent');const s=getSession();try{const role=await fetchMyRole(s.Email);Object.assign(s,role);setSession(s);await renderWorkspaceNav('home');document.getElementById('headerDate').textContent=new Date().toLocaleDateString('th-TH',{day:'numeric',month:'short',year:'numeric',timeZone:'Asia/Bangkok'});
- const results=await Promise.allSettled([fetchMyRequests(s.Email),apiGet('getMyExportRequests',{email:s.Email}),fetchPendingApprovals(s.Email)]);
+ function setMode(value){
+  setup=value;
+  document.getElementById('setupFields').hidden=!setup;
+  document.getElementById('recoveryCodeField').hidden=!(setup&&recovery);
+  document.getElementById('setupCode').required=setup&&recovery;
+  document.getElementById('setupCode').disabled=!(setup&&recovery);
+  document.getElementById('confirmPassword').required=setup;
+  document.getElementById('confirmPassword').disabled=!setup;
+  document.getElementById('password').autocomplete=setup?'new-password':'current-password';
+  document.getElementById('authTitle').textContent=setup?(recovery?'ตั้งรหัสผ่านใหม่':'ตั้งรหัสผ่านครั้งแรก'):'เข้าสู่พื้นที่ทำงาน';
+  document.getElementById('authHelp').textContent=setup?(recovery?'ใช้รหัสกู้บัญชีที่ผู้ดูแลให้ พร้อมกำหนดรหัสผ่านใหม่':'สำหรับอีเมลที่บริษัทเพิ่มไว้และยังไม่มีรหัสผ่าน · อย่างน้อย 8 ตัวอักษรและมีตัวเลข'):'ใช้อีเมลบริษัทและรหัสผ่านเดิมของแอปเบิกค่าใช้จ่าย';
+  document.getElementById('loginBtn').textContent=setup?'ตั้งรหัสผ่านและเข้าสู่ระบบ':'เข้าสู่ระบบ →';
+  document.getElementById('toggleSetup').textContent=setup?'กลับไปเข้าสู่ระบบ':(recovery?'ตั้งรหัสใหม่ด้วยรหัสกู้บัญชี':'ใช้งานครั้งแรก / ตั้งรหัสผ่าน');
+  error.textContent='';
+ }
+ document.getElementById('toggleSetup').onclick=()=>setMode(!setup);
+ setMode(recovery);
+ form.onsubmit=async e=>{
+  e.preventDefault();const btn=document.getElementById('loginBtn');if(btn.disabled)return;
+  btn.disabled=true;document.getElementById('toggleSetup').disabled=true;error.textContent='';
+  try{
+   const email=form.email.value.trim().toLowerCase(),password=form.password.value;
+   if(setup){
+    const payload={email,password,confirmPassword:document.getElementById('confirmPassword').value};
+    if(recovery)payload.setupCode=document.getElementById('setupCode').value.trim();
+    await apiPost('setPassword',payload);
+    setMode(false);document.getElementById('confirmPassword').value='';document.getElementById('setupCode').value='';
+    document.getElementById('authHelp').textContent='ตั้งรหัสผ่านสำเร็จแล้ว กำลังเข้าสู่ระบบ หากเข้าไม่ได้ให้ใช้รหัสที่เพิ่งตั้ง';
+   }
+   const s=await loginWithPassword(email,password);
+   if(!s.token)throw new Error('Backend ยังไม่ได้อัปเดตเป็น Workspace 8 กรุณาติดต่อผู้ดูแล');
+   setSession(s);const next=sessionStorage.getItem('exion_return_to');sessionStorage.removeItem('exion_return_to');
+   if(next&&/^[a-z0-9-]+\.html(?:[?#].*)?$/i.test(next)&&!next.startsWith('index.html')){location.href=next;return;}
+   await showHome(true);
+  }catch(e){error.textContent=e.message;}
+  finally{btn.disabled=false;document.getElementById('toggleSetup').disabled=false;}
+ };
+ async function showHome(freshLogin=false){document.getElementById('loginView').hidden=true;document.getElementById('workspace').hidden=false;const el=document.getElementById('homeContent');const s=getSession();try{
+ // Login already returns current roles. On later visits refresh alongside data, not before it.
+ renderWorkspaceNav('home');
+ document.getElementById('headerDate').textContent=new Date().toLocaleDateString('th-TH',{day:'numeric',month:'short',year:'numeric',timeZone:'Asia/Bangkok'});
+ const results=await Promise.allSettled([fetchMyRequests(s.Email),apiGet('getMyExportRequests',{email:s.Email}),fetchPendingApprovals(s.Email),freshLogin===true?Promise.resolve(s):fetchMyRole(s.Email)]);
+ const authFailure=results.find(r=>r.status==='rejected'&&r.reason?.code==='AUTH_REQUIRED');
+ if(authFailure)throw authFailure.reason;
+ if(results[3].status==='rejected')throw results[3].reason;
+ Object.assign(s,results[3].value);setSession(s);await renderWorkspaceNav('home');
  if(results[0].status==='rejected')throw results[0].reason;
  const rows=results[0].value||[], exports=results[1].status==='fulfilled'?results[1].value:[], inbox=results[2].status==='fulfilled'?results[2].value:null;
  const month=todayYMD().slice(0,7),current=rows.filter(r=>toYMD(r.ExpenseDate||r.Timestamp).startsWith(month));
