@@ -12,7 +12,41 @@ async function apiRequest(action,data={},method='POST'){
  if(result?.error){const e=new Error(result.error);e.code=result.code||'REQUEST_FAILED';if(e.code==='AUTH_REQUIRED'){clearSession();if(!location.pathname.endsWith('/index.html')&&!location.pathname.endsWith('/')){sessionStorage.setItem('exion_return_to',location.pathname.split('/').pop()+location.search);location.href='index.html';}}throw e;}
  return result;
 }
-function apiGet(action,params={}){const key=action+JSON.stringify(params);if(pendingReads.has(key))return pendingReads.get(key);const request=apiRequest(action,params,'GET').finally(()=>pendingReads.delete(key));pendingReads.set(key,request);return request;}
+// Coalesce reads started together. No completed financial data is cached here.
+let readQueue=[],readTimer=null,batchAvailable=true;
+function apiGet(action,params={}){
+ if(action==='getReceiptImage')return apiRequest(action,params,'GET');
+ const token=typeof getSession==='function'?getSession()?.token||'':'';
+ const key=token+':'+action+JSON.stringify(params);
+ if(pendingReads.has(key))return pendingReads.get(key);
+ const request=new Promise((resolve,reject)=>{
+  readQueue.push({action,params,token,resolve,reject});
+  if(readTimer===null)readTimer=setTimeout(flushReadQueue,0);
+ }).finally(()=>pendingReads.delete(key));
+ pendingReads.set(key,request);return request;
+}
+async function flushReadQueue(){
+ const queue=readQueue;readQueue=[];readTimer=null;
+ const current=typeof getSession==='function'?getSession()?.token||'':'';
+ const reads=queue.filter(r=>{if(r.token===current)return true;const e=new Error('บัญชีเปลี่ยนแล้ว กรุณาโหลดใหม่');e.code='AUTH_REQUIRED';r.reject(e);return false;});
+ for(let i=0;i<reads.length;i+=12){
+  const group=reads.slice(i,i+12);
+  const individual=()=>Promise.all(group.map(r=>apiRequest(r.action,r.params,'GET').then(r.resolve,r.reject)));
+  if(!batchAvailable||group.length===1||!current){await individual();continue;}
+  try{
+   const result=await apiRequest('batchRead',{requests:group.map(r=>({action:r.action,params:r.params}))},'GET');
+   if(!Array.isArray(result?.results)||result.results.length!==group.length)throw new Error('รูปแบบข้อมูลชุดคำขอไม่ถูกต้อง');
+   result.results.forEach((item,n)=>{
+    if(item.error){const e=new Error(item.error);e.code=item.code||'REQUEST_FAILED';group[n].reject(e);}
+    else group[n].resolve(item.value);
+   });
+  }catch(e){
+   // Compatibility during rollout: retry reads only when the old backend rejects this action.
+   if(e.code==='VALIDATION'&&e.message==='ไม่รองรับคำสั่งนี้'){batchAvailable=false;await individual();}
+   else group.forEach(r=>r.reject(e));
+  }
+ }
+}
 function apiPost(action,body={}){return apiRequest(action,body,'POST');}
 
 // --- Specific endpoints ---
