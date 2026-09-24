@@ -40,10 +40,12 @@
   finally{btn.disabled=false;document.getElementById('toggleSetup').disabled=false;}
  };
  async function showHome(freshLogin=false){document.getElementById('loginView').hidden=true;document.getElementById('workspace').hidden=false;const el=document.getElementById('homeContent');const s=getSession();try{
+ el.innerHTML=pageHeading('ภาพรวมของคุณ','เปิดเมนูหรือเริ่มกรอกคำขอได้ระหว่างโหลดข้อมูล',`<a class="btn btn-primary" href="submit.html">สร้างคำขอ</a>`)+`<div class="quick-grid"><a class="quick-link" href="submit.html">เบิกค่าใช้จ่าย →</a><a class="quick-link" href="status.html">คำขอของฉัน →</a><a class="quick-link" href="periods.html">รอบเบิก →</a></div><div class="skeleton-box" aria-label="กำลังโหลดข้อมูล"></div>`;
  // Login already returns current roles. On later visits refresh alongside data, not before it.
  renderWorkspaceNav('home');
  document.getElementById('headerDate').textContent=new Date().toLocaleDateString('th-TH',{day:'numeric',month:'short',year:'numeric',timeZone:'Asia/Bangkok'});
- const results=await Promise.allSettled([fetchMyRequests(s.Email),apiGet('getMyExportRequests',{email:s.Email}),fetchPendingApprovals(s.Email),freshLogin===true?Promise.resolve(s):fetchMyRole(s.Email)]);
+ if(freshLogin!==true)fetchMyRole(s.Email).then(role=>{if(getSession()?.token!==s.token)return;Object.assign(s,role);setSession(s);renderWorkspaceNav('home');}).catch(e=>{if(e.code==='AUTH_REQUIRED'){clearSession();location.href='index.html';}});
+ const results=await Promise.allSettled([fetchMyRequests(s.Email),apiGet('getMyExportRequests',{email:s.Email}),fetchPendingApprovals(s.Email),Promise.resolve(s)]);
  const authFailure=results.find(r=>r.status==='rejected'&&r.reason?.code==='AUTH_REQUIRED');
  if(authFailure)throw authFailure.reason;
  if(results[3].status==='rejected')throw results[3].reason;

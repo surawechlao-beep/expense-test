@@ -4,17 +4,20 @@ const NET_ERROR='ยังยืนยันผลจากเซิร์ฟเ
 const pendingReads=new Map();
 async function fetchWithTimeout(url,opts={},ms=API_TIMEOUT_MS){const ctrl=new AbortController();window.__apiAbort=ctrl;const timer=setTimeout(()=>ctrl.abort(),ms);try{return await fetch(url,{...opts,signal:ctrl.signal,cache:'no-store'});}catch(e){const err=new Error(NET_ERROR);err.code='NETWORK_UNCERTAIN';throw err;}finally{clearTimeout(timer);if(window.__apiAbort===ctrl)window.__apiAbort=null;}}
 async function apiRequest(action,data={},method='POST'){
+ const started=Date.now();
  const session=typeof getSession==='function'?getSession():null;
  const body={...data,action,_method:method,token:session?.token||''};
  const response=await fetchWithTimeout(CONFIG.API_URL,{method:'POST',redirect:'follow',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)},data.items||data.receipts||data.signatureBase64?120000:API_TIMEOUT_MS);
  if(!response.ok){const e=new Error('เซิร์ฟเวอร์ตอบกลับไม่สำเร็จ ('+response.status+')');e.code='NETWORK_UNCERTAIN';throw e;}
  let result;try{result=await response.json();}catch(error){const e=new Error('ไม่สามารถอ่านผลจากเซิร์ฟเวอร์ กรุณาตรวจสอบการติดตั้ง Backend');e.code='NETWORK_UNCERTAIN';throw e;}
+ if(session?.token&&session.token!==getSession()?.token){const e=new Error('บัญชีเปลี่ยนแล้ว กรุณาโหลดใหม่');e.code='STALE_SESSION';throw e;}
  if(result?.error){const e=new Error(result.error);e.code=result.code||'REQUEST_FAILED';if(e.code==='AUTH_REQUIRED'){clearSession();if(!location.pathname.endsWith('/index.html')&&!location.pathname.endsWith('/')){sessionStorage.setItem('exion_return_to',location.pathname.split('/').pop()+location.search);location.href='index.html';}}throw e;}
+ performanceSamples.push({action,ms:Date.now()-started,serverMs:result?.serverMs??null,at:new Date().toISOString()});if(performanceSamples.length>80)performanceSamples.shift();try{sessionStorage.setItem('exion_perf:'+CONFIG.API_URL,JSON.stringify(performanceSamples));}catch(e){}
  return result;
 }
 // Coalesce reads started together. No completed financial data is cached here.
 let readQueue=[],readTimer=null,batchAvailable=true;
-function apiGet(action,params={}){
+function networkRead(action,params={}){
  if(action==='getReceiptImage')return apiRequest(action,params,'GET');
  const token=typeof getSession==='function'?getSession()?.token||'':'';
  const key=token+':'+action+JSON.stringify(params);
@@ -22,7 +25,7 @@ function apiGet(action,params={}){
  const request=new Promise((resolve,reject)=>{
   readQueue.push({action,params,token,resolve,reject});
   if(readTimer===null)readTimer=setTimeout(flushReadQueue,0);
- }).finally(()=>pendingReads.delete(key));
+ }).finally(()=>{if(pendingReads.get(key)===request)pendingReads.delete(key);});
  pendingReads.set(key,request);return request;
 }
 async function flushReadQueue(){
@@ -47,7 +50,44 @@ async function flushReadQueue(){
   }
  }
 }
-function apiPost(action,body={}){return apiRequest(action,body,'POST');}
+async function apiPost(action,body={}){const writes=!['getReceiptImage'].includes(action);if(writes)invalidateReadSnapshots();try{return await apiRequest(action,body,'POST');}finally{if(writes){invalidateReadSnapshots();if(typeof Event==='function'&&typeof window.dispatchEvent==='function')window.dispatchEvent(new Event('exion:write'));}}}
+
+// Per-tab snapshots; never used for roles, approval details, previews or writes.
+const SNAPSHOT_ACTIONS=new Set(['getCategories','getPettyCategories','getMyRequests','getMyExportRequests','getPendingApprovals','getExportApprovalInbox','getPettyInbox','getPettyHome','getPettyLedger','getMyTeam','getMyTeamRequests','getAllRequests','getVisibleRequests','getCustomers','getFuelRate','getMyApprover','getUnpaidExports','getPettyMSBC','getMyNotifications','getExportableStaff']);
+const SNAPSHOT_KEY='exion_snapshots_v85:'+CONFIG.API_URL;
+let snapshotEpoch=0,snapshotBypass=false;
+try{snapshotBypass=sessionStorage.getItem(SNAPSHOT_KEY+':refresh')==='1';sessionStorage.removeItem(SNAPSHOT_KEY+':refresh');}catch(e){}
+let performanceSamples=[];try{performanceSamples=JSON.parse(sessionStorage.getItem('exion_perf:'+CONFIG.API_URL)||'[]');if(!Array.isArray(performanceSamples))performanceSamples=[];}catch(e){}
+function snapshotNotice(detail){if(typeof CustomEvent==='function')window.dispatchEvent(new CustomEvent('exion:data-status',{detail}));}
+function invalidateReadSnapshots(broadcast=true){snapshotEpoch++;pendingReads.clear();try{sessionStorage.removeItem(SNAPSHOT_KEY);if(broadcast&&typeof localStorage!=='undefined')localStorage.setItem(SNAPSHOT_KEY+':changed',Date.now()+':'+Math.random());}catch(e){}}
+if(typeof window.addEventListener==='function')window.addEventListener('storage',e=>{if(e.key===SNAPSHOT_KEY+':changed'){invalidateReadSnapshots(false);snapshotNotice({state:'changed',at:null});}});
+function readSnapshots(){try{const s=JSON.parse(sessionStorage.getItem(SNAPSHOT_KEY)||'null');return s&&s.owner===getSession()?.token?s.entries:{};}catch(e){return {};}}
+function saveSnapshot(key,value,token,epoch){
+ if(epoch!==snapshotEpoch||token!==getSession()?.token)return;
+ try{const entries=readSnapshots(),now=Date.now();entries[key]={value,at:now};
+  Object.keys(entries).forEach(k=>{if(now-entries[k].at>120000)delete entries[k];});
+  let text=JSON.stringify({owner:token,entries});
+  while(text.length>800000&&Object.keys(entries).length){const oldest=Object.keys(entries).sort((a,b)=>entries[a].at-entries[b].at)[0];delete entries[oldest];text=JSON.stringify({owner:token,entries});}
+  sessionStorage.setItem(SNAPSHOT_KEY,text);
+ }catch(e){} // Storage quota/private mode: fall back to network.
+}
+function apiGet(action,params={}){
+ if(!SNAPSHOT_ACTIONS.has(action)||!getSession())return networkRead(action,params);
+ const key=action+JSON.stringify(params),token=getSession().token,epoch=snapshotEpoch;
+ const hit=snapshotBypass?null:readSnapshots()[key];
+ const fresh=networkRead(action,params).then(value=>{saveSnapshot(key,value,token,epoch);return value;});
+ if(hit&&Date.now()-hit.at<120000){
+  snapshotNotice({state:'cached',at:hit.at});
+  fresh.then(()=>snapshotNotice({state:'ready',at:hit.at})).catch(e=>{
+   if(e.code==='AUTH_REQUIRED'||e.code==='FORBIDDEN'){invalidateReadSnapshots();clearSession();location.href='index.html';return;}
+   snapshotNotice({state:'error',at:hit.at});
+  });
+  return Promise.resolve(hit.value);
+ }
+ return fresh;
+}
+function refreshWorkspaceData(){try{sessionStorage.setItem(SNAPSHOT_KEY+':refresh','1');}catch(e){}location.reload();}
+function getExpensePerformance(){return performanceSamples.slice();}
 
 // --- Specific endpoints ---
 // ⚠️ fetchStaff() removed for security — use verifyStaff(email) instead

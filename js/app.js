@@ -11,12 +11,16 @@ function getSession() {
 }
 
 function setSession(staff) {
+  if(getSession()?.token!==staff.token&&typeof invalidateReadSnapshots==='function')invalidateReadSnapshots();
   sessionStorage.setItem(SESSION_KEY, JSON.stringify(staff));
+  if(typeof window.EXION_SPA!=='undefined')queueMicrotask(()=>window.dispatchEvent(new Event('exion:session')));
   localStorage.removeItem(SESSION_KEY);
 }
 
 function clearSession() {
+  if(typeof invalidateReadSnapshots==='function')invalidateReadSnapshots();
   sessionStorage.removeItem(SESSION_KEY);
+  if(typeof window.EXION_SPA!=='undefined')queueMicrotask(()=>window.dispatchEvent(new Event('exion:session')));
   localStorage.removeItem(SESSION_KEY);
 }
 
